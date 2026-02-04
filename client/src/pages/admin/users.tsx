@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Pencil, Users, Shield, Check } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Users, Shield, Check, KeyRound, RotateCcw, Building2 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,11 +43,15 @@ export default function AdminUsers() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const [passwordUser, setPasswordUser] = useState<UserWithRoles | null>(null);
+  const [customPassword, setCustomPassword] = useState("");
   const [editingUser, setEditingUser] = useState<UserWithRoles | null>(null);
   const [formEmail, setFormEmail] = useState("");
   const [formName, setFormName] = useState("");
   const [formSectorIds, setFormSectorIds] = useState<string[]>([]);
   const [formRoleName, setFormRoleName] = useState<"Admin" | "Coordenador" | "Usuario">("Usuario");
+  const [formAuthProvider, setFormAuthProvider] = useState<"entra" | "local">("local");
 
   const { data: users = [], isLoading: usersLoading } = useQuery<UserWithRoles[]>({
     queryKey: ["/api/admin/users"],
@@ -58,7 +62,7 @@ export default function AdminUsers() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: { email: string; name: string; sectorIds?: string[]; roleName: string }) => {
+    mutationFn: async (data: { email: string; name: string; sectorIds?: string[]; roleName: string; authProvider?: string }) => {
       return apiRequest("POST", "/api/admin/users", data);
     },
     onSuccess: () => {
@@ -101,12 +105,42 @@ export default function AdminUsers() {
     },
   });
 
+  const resetPasswordMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      return apiRequest("POST", `/api/admin/users/${userId}/reset-password`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({ title: "Senha redefinida para o padrão" });
+    },
+    onError: () => {
+      toast({ title: "Erro ao redefinir senha", variant: "destructive" });
+    },
+  });
+
+  const setPasswordMutation = useMutation({
+    mutationFn: async ({ userId, password }: { userId: string; password: string }) => {
+      return apiRequest("POST", `/api/admin/users/${userId}/set-password`, { password });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({ title: "Senha definida com sucesso" });
+      setIsPasswordDialogOpen(false);
+      setPasswordUser(null);
+      setCustomPassword("");
+    },
+    onError: () => {
+      toast({ title: "Erro ao definir senha", variant: "destructive" });
+    },
+  });
+
   const handleOpenCreate = () => {
     setEditingUser(null);
     setFormEmail("");
     setFormName("");
     setFormSectorIds([]);
     setFormRoleName("Usuario");
+    setFormAuthProvider("local");
     setIsDialogOpen(true);
   };
 
@@ -116,6 +150,7 @@ export default function AdminUsers() {
     setFormName(user.name);
     setFormSectorIds(user.roles?.map(r => r.sectorId) || []);
     setFormRoleName(user.roles?.[0]?.roleName || "Usuario");
+    setFormAuthProvider(user.authProvider as "entra" | "local" || "local");
     setIsDialogOpen(true);
   };
 
@@ -126,6 +161,13 @@ export default function AdminUsers() {
     setFormName("");
     setFormSectorIds([]);
     setFormRoleName("Usuario");
+    setFormAuthProvider("local");
+  };
+
+  const handleOpenPasswordDialog = (user: UserWithRoles) => {
+    setPasswordUser(user);
+    setCustomPassword("");
+    setIsPasswordDialogOpen(true);
   };
 
   const handleToggleSector = (sectorId: string) => {
@@ -153,8 +195,15 @@ export default function AdminUsers() {
         name: formName,
         sectorIds: formSectorIds.length > 0 ? formSectorIds : undefined,
         roleName: formRoleName,
+        authProvider: formAuthProvider,
       });
     }
+  };
+
+  const handleSetPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!passwordUser || !customPassword.trim()) return;
+    setPasswordMutation.mutate({ userId: passwordUser.id, password: customPassword });
   };
 
   const getInitials = (name: string) => {
@@ -237,9 +286,10 @@ export default function AdminUsers() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Usuário</TableHead>
+                    <TableHead>Autenticação</TableHead>
                     <TableHead>Setores e Papéis</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="w-[100px]">Ações</TableHead>
+                    <TableHead className="w-[160px]">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -258,6 +308,26 @@ export default function AdminUsers() {
                             <p className="text-xs text-muted-foreground">{user.email}</p>
                           </div>
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={user.authProvider === "local" ? "secondary" : "outline"} className="gap-1">
+                          {user.authProvider === "local" ? (
+                            <>
+                              <KeyRound className="h-3 w-3" />
+                              Local
+                            </>
+                          ) : (
+                            <>
+                              <Building2 className="h-3 w-3" />
+                              Microsoft
+                            </>
+                          )}
+                        </Badge>
+                        {user.authProvider === "local" && user.mustChangePassword && (
+                          <Badge variant="outline" className="ml-1 text-amber-600 border-amber-600">
+                            Senha pendente
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
@@ -294,14 +364,38 @@ export default function AdminUsers() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleOpenEdit(user)}
-                          data-testid={`button-edit-${user.id}`}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleOpenEdit(user)}
+                            data-testid={`button-edit-${user.id}`}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          {user.authProvider === "local" && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => resetPasswordMutation.mutate(user.id)}
+                                title="Redefinir senha para padrão"
+                                data-testid={`button-reset-password-${user.id}`}
+                              >
+                                <RotateCcw className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleOpenPasswordDialog(user)}
+                                title="Definir senha personalizada"
+                                data-testid={`button-set-password-${user.id}`}
+                              >
+                                <KeyRound className="h-4 w-4" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -326,6 +420,39 @@ export default function AdminUsers() {
           </DialogHeader>
           <form onSubmit={handleSubmit}>
             <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto">
+              {!editingUser && (
+                <div className="space-y-2">
+                  <Label>Tipo de Autenticação</Label>
+                  <Select
+                    value={formAuthProvider}
+                    onValueChange={(v) => setFormAuthProvider(v as "entra" | "local")}
+                  >
+                    <SelectTrigger data-testid="select-auth-provider">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="local">
+                        <div className="flex items-center gap-2">
+                          <KeyRound className="h-4 w-4" />
+                          <span>Usuário Local (e-mail/senha)</span>
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="entra">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="h-4 w-4" />
+                          <span>Microsoft Entra ID</span>
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {formAuthProvider === "local" && (
+                    <p className="text-xs text-muted-foreground">
+                      O usuário receberá a senha padrão e precisará trocá-la no primeiro acesso.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-2">
                 <Label htmlFor="email">E-mail</Label>
                 <Input
@@ -416,6 +543,55 @@ export default function AdminUsers() {
                 data-testid="button-save-user"
               >
                 {editingUser ? "Salvar" : "Criar"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Definir Senha Personalizada</DialogTitle>
+            <DialogDescription>
+              Defina uma senha personalizada para {passwordUser?.name}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSetPassword}>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="customPassword">Nova Senha</Label>
+                <Input
+                  id="customPassword"
+                  type="password"
+                  value={customPassword}
+                  onChange={(e) => setCustomPassword(e.target.value)}
+                  placeholder="Digite a nova senha"
+                  data-testid="input-custom-password"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Requisitos: mínimo 10 caracteres, 1 maiúscula, 1 minúscula, 1 número, 1 caractere especial
+                </p>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={() => {
+                  setIsPasswordDialogOpen(false);
+                  setPasswordUser(null);
+                  setCustomPassword("");
+                }}
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                disabled={!customPassword.trim() || setPasswordMutation.isPending}
+                data-testid="button-save-custom-password"
+              >
+                Definir Senha
               </Button>
             </DialogFooter>
           </form>

@@ -5,7 +5,8 @@
 41 Hub is an internal corporate portal for "41 Tech" company. It serves as a centralized hub for accessing internal applications (APPs) and dashboards (Power BI). The system features Microsoft Entra ID (Azure AD) authentication, role-based access control (RBAC) with sector-based permissions, and a gateway/proxy architecture to protect internal resources.
 
 Key features:
-- Microsoft Entra ID OAuth2/OIDC authentication
+- Dual authentication: Microsoft Entra ID OAuth2/OIDC and Local (email/password)
+- Local user management with mandatory password change on first login
 - Role-based access control: Admin, Coordenador (Coordinator), Usuario (User)
 - Multi-sector user assignment (users can belong to multiple sectors with the same role)
 - Sector-based resource visibility with allow/deny overrides per user
@@ -51,12 +52,20 @@ Preferred communication style: Simple, everyday language.
 - **Key Tables**: users, sectors, roles, user_sector_roles, resources, resource_overrides, favorites, recent_access, audit_logs, health_checks
 
 ### Authentication Flow
+**Microsoft Entra ID:**
 1. User clicks "Login with Microsoft" 
 2. Redirect to Microsoft Entra ID authorization endpoint
 3. Callback receives authorization code, exchanges for tokens
 4. Backend validates JWT and extracts user claims (oid, email, name, groups)
 5. User record created/updated in database
 6. Session established with userId
+
+**Local Authentication:**
+1. User navigates to /login/local and enters email/password
+2. Backend validates credentials against bcrypt-hashed password
+3. Rate limiting (10 attempts/minute/IP) prevents brute force attacks
+4. If mustChangePassword=true, user must change password before accessing the portal
+5. Session established with userId
 
 ### Authorization Model
 - **Admin**: Full access to all sectors and resources, complete admin panel
@@ -72,6 +81,9 @@ Preferred communication style: Simple, everyday language.
 - SameSite=strict cookie policy for CSRF protection
 - HttpOnly cookies to prevent XSS access to session
 - Comprehensive audit logging for all admin operations
+- Password requirements: min 10 chars, uppercase, lowercase, number, special character
+- Bcrypt password hashing with 12 salt rounds
+- Rate limiting on local login (10 attempts/minute/IP)
 
 ### Resource Gateway Pattern
 - Internal apps are NOT directly exposed to the internet

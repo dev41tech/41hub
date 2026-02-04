@@ -21,7 +21,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import {
@@ -61,12 +61,8 @@ export function AppSidebar() {
   return (
     <Sidebar>
       <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
-        <div className="flex items-center gap-3 min-w-0">
-          <ThemeLogo className="h-8 w-auto shrink-0" />
-          <div className="flex flex-col min-w-0">
-            <span className="font-semibold text-sidebar-foreground truncate leading-tight">41 Hub</span>
-            <span className="text-xs text-muted-foreground truncate leading-tight">Portal Corporativo</span>
-          </div>
+        <div className="flex items-center justify-center">
+          <ThemeLogo className="h-10 w-auto" />
         </div>
       </SidebarHeader>
 
@@ -128,6 +124,7 @@ export function AppSidebar() {
                 data-testid="button-user-menu"
               >
                 <Avatar className="h-8 w-8">
+                  {user.photoUrl && <AvatarImage src={user.photoUrl} alt={user.name} />}
                   <AvatarFallback className="bg-primary text-primary-foreground text-xs">
                     {getInitials(user.name)}
                   </AvatarFallback>

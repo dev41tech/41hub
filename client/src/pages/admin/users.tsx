@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Pencil, UserX, UserCheck, Users, Shield } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Users, Shield, Check } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -32,7 +33,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { SearchInput } from "@/components/search-input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -45,7 +46,7 @@ export default function AdminUsers() {
   const [editingUser, setEditingUser] = useState<UserWithRoles | null>(null);
   const [formEmail, setFormEmail] = useState("");
   const [formName, setFormName] = useState("");
-  const [formSectorId, setFormSectorId] = useState("");
+  const [formSectorIds, setFormSectorIds] = useState<string[]>([]);
   const [formRoleName, setFormRoleName] = useState<"Admin" | "Coordenador" | "Usuario">("Usuario");
 
   const { data: users = [], isLoading: usersLoading } = useQuery<UserWithRoles[]>({
@@ -57,12 +58,13 @@ export default function AdminUsers() {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: { email: string; name: string; sectorId?: string; roleName: string }) => {
+    mutationFn: async (data: { email: string; name: string; sectorIds?: string[]; roleName: string }) => {
       return apiRequest("POST", "/api/admin/users", data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/users/directory"] });
       toast({ title: "Usuário criado com sucesso" });
       handleCloseDialog();
     },
@@ -72,11 +74,12 @@ export default function AdminUsers() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, ...data }: { id: string; name?: string; isActive?: boolean }) => {
+    mutationFn: async ({ id, ...data }: { id: string; name?: string; isActive?: boolean; sectorIds?: string[]; roleName?: string }) => {
       return apiRequest("PATCH", `/api/admin/users/${id}`, data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/users/directory"] });
       toast({ title: "Usuário atualizado com sucesso" });
       handleCloseDialog();
     },
@@ -102,7 +105,7 @@ export default function AdminUsers() {
     setEditingUser(null);
     setFormEmail("");
     setFormName("");
-    setFormSectorId("");
+    setFormSectorIds([]);
     setFormRoleName("Usuario");
     setIsDialogOpen(true);
   };
@@ -111,8 +114,8 @@ export default function AdminUsers() {
     setEditingUser(user);
     setFormEmail(user.email);
     setFormName(user.name);
-    setFormSectorId(user.roles[0]?.sectorId || "");
-    setFormRoleName(user.roles[0]?.roleName || "Usuario");
+    setFormSectorIds(user.roles?.map(r => r.sectorId) || []);
+    setFormRoleName(user.roles?.[0]?.roleName || "Usuario");
     setIsDialogOpen(true);
   };
 
@@ -121,8 +124,16 @@ export default function AdminUsers() {
     setEditingUser(null);
     setFormEmail("");
     setFormName("");
-    setFormSectorId("");
+    setFormSectorIds([]);
     setFormRoleName("Usuario");
+  };
+
+  const handleToggleSector = (sectorId: string) => {
+    setFormSectorIds((prev) =>
+      prev.includes(sectorId)
+        ? prev.filter((id) => id !== sectorId)
+        : [...prev, sectorId]
+    );
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -130,12 +141,17 @@ export default function AdminUsers() {
     if (!formEmail.trim() || !formName.trim()) return;
 
     if (editingUser) {
-      updateMutation.mutate({ id: editingUser.id, name: formName });
+      updateMutation.mutate({ 
+        id: editingUser.id, 
+        name: formName,
+        sectorIds: formSectorIds.length > 0 ? formSectorIds : undefined,
+        roleName: formRoleName,
+      });
     } else {
       createMutation.mutate({
         email: formEmail,
         name: formName,
-        sectorId: formSectorId || undefined,
+        sectorIds: formSectorIds.length > 0 ? formSectorIds : undefined,
         roleName: formRoleName,
       });
     }
@@ -232,6 +248,7 @@ export default function AdminUsers() {
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <Avatar className="h-8 w-8">
+                            {user.photoUrl && <AvatarImage src={user.photoUrl} alt={user.name} />}
                             <AvatarFallback className="text-xs bg-primary text-primary-foreground">
                               {getInitials(user.name)}
                             </AvatarFallback>
@@ -296,7 +313,7 @@ export default function AdminUsers() {
       </Card>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
               {editingUser ? "Editar Usuário" : "Novo Usuário"}
@@ -308,7 +325,7 @@ export default function AdminUsers() {
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit}>
-            <div className="space-y-4 py-4">
+            <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto">
               <div className="space-y-2">
                 <Label htmlFor="email">E-mail</Label>
                 <Input
@@ -331,41 +348,58 @@ export default function AdminUsers() {
                   data-testid="input-user-name"
                 />
               </div>
-              {!editingUser && (
-                <>
-                  <div className="space-y-2">
-                    <Label htmlFor="sector">Setor</Label>
-                    <Select value={formSectorId} onValueChange={setFormSectorId}>
-                      <SelectTrigger data-testid="select-sector">
-                        <SelectValue placeholder="Selecione um setor" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {sectors.map((sector) => (
-                          <SelectItem key={sector.id} value={sector.id}>
-                            {sector.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="role">Papel</Label>
-                    <Select
-                      value={formRoleName}
-                      onValueChange={(v) => setFormRoleName(v as typeof formRoleName)}
-                    >
-                      <SelectTrigger data-testid="select-role">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Usuario">Usuário</SelectItem>
-                        <SelectItem value="Coordenador">Coordenador</SelectItem>
-                        <SelectItem value="Admin">Admin</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </>
-              )}
+
+              <div className="space-y-2">
+                <Label>Setores</Label>
+                <div className="border rounded-md p-3 max-h-40 overflow-y-auto space-y-2">
+                  {sectors.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">Nenhum setor cadastrado</p>
+                  ) : (
+                    sectors.map((sector) => (
+                      <div key={sector.id} className="flex items-center gap-2">
+                        <Checkbox
+                          id={`sector-${sector.id}`}
+                          checked={formSectorIds.includes(sector.id)}
+                          onCheckedChange={() => handleToggleSector(sector.id)}
+                          data-testid={`checkbox-sector-${sector.id}`}
+                        />
+                        <label
+                          htmlFor={`sector-${sector.id}`}
+                          className="text-sm cursor-pointer flex-1"
+                        >
+                          {sector.name}
+                        </label>
+                        {formSectorIds.includes(sector.id) && (
+                          <Check className="h-4 w-4 text-primary" />
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Selecione um ou mais setores para o usuário
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="role">Papel (aplicado a todos os setores)</Label>
+                <Select
+                  value={formRoleName}
+                  onValueChange={(v) => setFormRoleName(v as typeof formRoleName)}
+                >
+                  <SelectTrigger data-testid="select-role">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Usuario">Usuário</SelectItem>
+                    <SelectItem value="Coordenador">Coordenador</SelectItem>
+                    <SelectItem value="Admin">Admin</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  O papel será aplicado a todos os setores selecionados
+                </p>
+              </div>
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={handleCloseDialog}>

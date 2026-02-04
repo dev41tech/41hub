@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { 
   Mail, 
   Building2, 
@@ -19,11 +21,13 @@ import {
   Clock, 
   Star,
   ExternalLink,
-  Loader2
+  Loader2,
+  Search,
+  BookUser
 } from "lucide-react";
 import { SiWhatsapp } from "react-icons/si";
 import { useToast } from "@/hooks/use-toast";
-import type { TeamMember, ResourceWithHealth } from "@shared/schema";
+import type { TeamMember, ResourceWithHealth, Sector } from "@shared/schema";
 import { useLocation } from "wouter";
 
 function cleanPhoneNumber(phone: string): string {
@@ -47,8 +51,40 @@ export default function Profile() {
   const [whatsapp, setWhatsapp] = useState(user?.whatsapp || "");
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
-  const { data: team = [], isLoading: isLoadingTeam } = useQuery<TeamMember[]>({
-    queryKey: ["/api/users/team"],
+  const [showAllSectors, setShowAllSectors] = useState(false);
+  const [selectedSectorId, setSelectedSectorId] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  useEffect(() => {
+    if (user?.whatsapp !== undefined) {
+      setWhatsapp(user.whatsapp || "");
+    }
+  }, [user?.whatsapp]);
+
+  const { data: sectors = [] } = useQuery<Sector[]>({
+    queryKey: ["/api/sectors"],
+    enabled: !!user,
+  });
+
+  const directoryParams = new URLSearchParams();
+  if (showAllSectors) {
+    directoryParams.set("all", "true");
+  } else if (selectedSectorId && selectedSectorId !== "all") {
+    directoryParams.set("sectorId", selectedSectorId);
+  }
+  if (searchQuery.trim()) {
+    directoryParams.set("q", searchQuery.trim());
+  }
+
+  const { data: directory = [], isLoading: isLoadingDirectory } = useQuery<TeamMember[]>({
+    queryKey: ["/api/users/directory", directoryParams.toString()],
+    queryFn: async () => {
+      const response = await fetch(`/api/users/directory?${directoryParams.toString()}`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch directory");
+      return response.json();
+    },
     enabled: !!user,
   });
 
@@ -66,8 +102,9 @@ export default function Profile() {
     mutationFn: async (whatsappValue: string) => {
       return apiRequest("PATCH", "/api/users/me", { whatsapp: whatsappValue || null });
     },
-    onSuccess: () => {
-      refreshUser();
+    onSuccess: async () => {
+      await refreshUser();
+      queryClient.invalidateQueries({ queryKey: ["/api/users/directory"] });
       toast({
         title: "WhatsApp atualizado",
         description: "Seu número foi salvo com sucesso.",
@@ -118,7 +155,7 @@ export default function Profile() {
       if (!response.ok) throw new Error("Upload failed");
 
       await refreshUser();
-      queryClient.invalidateQueries({ queryKey: ["/api/users/team"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/users/directory"] });
       toast({
         title: "Foto atualizada",
         description: "Sua foto de perfil foi salva.",
@@ -131,12 +168,17 @@ export default function Profile() {
       });
     } finally {
       setIsUploadingPhoto(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
   };
 
   if (!user) {
     return null;
   }
+
+  const userSectorIds = user.roles?.map(r => r.sectorId) || [];
 
   return (
     <div className="container max-w-4xl py-8 px-4 space-y-6">
@@ -238,7 +280,7 @@ export default function Profile() {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Usado para o botão "Chamar no WhatsApp" visível para colegas do seu setor.
+                  Usado para o botão "Chamar no WhatsApp" visível para colegas no Diretório.
                 </p>
               </div>
             </div>
@@ -249,12 +291,55 @@ export default function Profile() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Users className="h-5 w-5" />
-            Meu Time
+            <BookUser className="h-5 w-5" />
+            Diretório
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          {isLoadingTeam ? (
+        <CardContent className="space-y-4">
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Buscar por nome, email ou whatsapp..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9"
+                  data-testid="input-directory-search"
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <Select
+                value={selectedSectorId}
+                onValueChange={setSelectedSectorId}
+                disabled={showAllSectors}
+              >
+                <SelectTrigger className="w-[180px]" data-testid="select-directory-sector">
+                  <SelectValue placeholder="Filtrar por setor" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Meus setores</SelectItem>
+                  {sectors.map((sector) => (
+                    <SelectItem key={sector.id} value={sector.id}>
+                      {sector.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="show-all"
+                  checked={showAllSectors}
+                  onCheckedChange={setShowAllSectors}
+                  data-testid="switch-show-all-sectors"
+                />
+                <Label htmlFor="show-all" className="text-sm whitespace-nowrap">Todos</Label>
+              </div>
+            </div>
+          </div>
+
+          {isLoadingDirectory ? (
             <div className="space-y-3">
               {[1, 2, 3].map((i) => (
                 <div key={i} className="flex items-center gap-3">
@@ -266,14 +351,17 @@ export default function Profile() {
                 </div>
               ))}
             </div>
-          ) : team.length === 0 ? (
-            <p className="text-muted-foreground text-sm">Nenhum colega no mesmo setor encontrado.</p>
+          ) : directory.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              {searchQuery ? "Nenhum colaborador encontrado com essa busca." : "Nenhum colaborador encontrado."}
+            </p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
-              {team.map((member) => (
+              {directory.map((member) => (
                 <div
                   key={member.id}
                   className="flex items-center gap-3 p-3 rounded-lg border bg-card"
+                  data-testid={`directory-member-${member.id}`}
                 >
                   <Avatar className="h-10 w-10">
                     {member.photoUrl && <AvatarImage src={member.photoUrl} alt={member.name} />}
@@ -291,6 +379,11 @@ export default function Profile() {
                             {role.sectorName}
                           </Badge>
                         ))}
+                        {member.roles.length > 2 && (
+                          <Badge variant="outline" className="text-xs py-0">
+                            +{member.roles.length - 2}
+                          </Badge>
+                        )}
                       </div>
                     )}
                   </div>

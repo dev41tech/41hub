@@ -51,12 +51,14 @@ import type { Resource, Sector } from "@shared/schema";
 
 type ResourceType = "APP" | "DASHBOARD";
 type EmbedMode = "LINK" | "IFRAME" | "POWERBI";
+type OpenBehavior = "HUB_ONLY" | "NEW_TAB_ONLY" | "BOTH";
 
 interface ResourceFormData {
   name: string;
   type: ResourceType;
   sectorId: string;
   embedMode: EmbedMode;
+  openBehavior: OpenBehavior;
   url: string;
   tags: string;
   icon: string;
@@ -68,6 +70,7 @@ const defaultFormData: ResourceFormData = {
   type: "APP",
   sectorId: "",
   embedMode: "LINK",
+  openBehavior: "BOTH",
   url: "",
   tags: "",
   icon: "Layout",
@@ -153,6 +156,7 @@ export default function AdminResources() {
       type: resource.type as ResourceType,
       sectorId: resource.sectorId || "",
       embedMode: resource.embedMode as EmbedMode,
+      openBehavior: (resource as any).openBehavior as OpenBehavior || "BOTH",
       url: resource.url || "",
       tags: resource.tags?.join(", ") || "",
       icon: resource.icon || "Layout",
@@ -181,6 +185,7 @@ export default function AdminResources() {
       type: formData.type,
       sectorId: formData.sectorId || null,
       embedMode: formData.embedMode,
+      openBehavior: formData.openBehavior,
       url: formData.url || null,
       tags: formData.tags.split(",").map((t) => t.trim()).filter(Boolean),
       icon: formData.icon || "Layout",
@@ -438,6 +443,26 @@ export default function AdminResources() {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="openBehavior">Comportamento de Abertura</Label>
+                <Select
+                  value={formData.openBehavior}
+                  onValueChange={(v) => setFormData({ ...formData, openBehavior: v as OpenBehavior })}
+                >
+                  <SelectTrigger data-testid="select-open-behavior">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="HUB_ONLY">Somente no Hub</SelectItem>
+                    <SelectItem value="NEW_TAB_ONLY">Somente em Nova Guia</SelectItem>
+                    <SelectItem value="BOTH">Usuário Escolhe</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Define como o recurso pode ser aberto pelos usuários
+                </p>
               </div>
 
               <div className="space-y-2">

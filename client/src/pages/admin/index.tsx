@@ -1,4 +1,4 @@
-import { useLocation, Link } from "wouter";
+import { Link } from "wouter";
 import {
   Users,
   Building2,
@@ -6,8 +6,10 @@ import {
   FileText,
   ChevronRight,
   Shield,
+  Clock,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { useQuery } from "@tanstack/react-query";
 
 interface AdminStats {
@@ -15,6 +17,19 @@ interface AdminStats {
   sectors: number;
   resources: number;
   auditLogs: number;
+}
+
+interface AuditLogWithActor {
+  id: string;
+  actorUserId: string | null;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  metadata: Record<string, any>;
+  ip: string | null;
+  createdAt: string;
+  actorName?: string;
+  actorEmail?: string;
 }
 
 const adminSections = [
@@ -48,9 +63,56 @@ const adminSections = [
   },
 ];
 
+function formatAction(action: string): string {
+  const actionMap: Record<string, string> = {
+    user_login: "Login",
+    user_logout: "Logout",
+    user_create: "Criou usuário",
+    user_update: "Atualizou usuário",
+    user_update_profile: "Atualizou perfil",
+    user_update_theme: "Alterou tema",
+    user_upload_photo: "Enviou foto",
+    sector_create: "Criou setor",
+    sector_update: "Atualizou setor",
+    sector_delete: "Excluiu setor",
+    resource_create: "Criou recurso",
+    resource_update: "Atualizou recurso",
+    resource_delete: "Excluiu recurso",
+    resource_access: "Acessou recurso",
+    favorite_add: "Adicionou favorito",
+    favorite_remove: "Removeu favorito",
+  };
+  return actionMap[action] || action;
+}
+
+function formatTimeAgo(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return "agora";
+  if (diffMins < 60) return `${diffMins}min`;
+  if (diffHours < 24) return `${diffHours}h`;
+  return `${diffDays}d`;
+}
+
 export default function AdminIndex() {
   const { data: stats } = useQuery<AdminStats>({
     queryKey: ["/api/admin/stats"],
+  });
+
+  const { data: recentLogs = [] } = useQuery<AuditLogWithActor[]>({
+    queryKey: ["/api/admin/audit", "recent"],
+    queryFn: async () => {
+      const response = await fetch("/api/admin/audit?limit=10", {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to fetch logs");
+      return response.json();
+    },
   });
 
   return (
@@ -137,6 +199,51 @@ export default function AdminIndex() {
           </Link>
         ))}
       </div>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between pb-2">
+          <CardTitle className="text-base font-medium flex items-center gap-2">
+            <Clock className="h-4 w-4" />
+            Atividade Recente
+          </CardTitle>
+          <Link href="/admin/audit">
+            <Badge variant="outline" className="cursor-pointer hover-elevate">
+              Ver todos
+              <ChevronRight className="h-3 w-3 ml-1" />
+            </Badge>
+          </Link>
+        </CardHeader>
+        <CardContent>
+          {recentLogs.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-4">
+              Nenhuma atividade registrada
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {recentLogs.map((log) => (
+                <div
+                  key={log.id}
+                  className="flex items-center justify-between gap-4 py-2 border-b last:border-0"
+                  data-testid={`log-${log.id}`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {log.actorName || log.actorEmail || "Sistema"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatAction(log.action)}
+                      {log.targetType && ` • ${log.targetType}`}
+                    </p>
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    {formatTimeAgo(log.createdAt)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

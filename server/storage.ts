@@ -104,6 +104,21 @@ export interface IStorage {
     photoUrl: string | null;
     roles: Array<{ sectorId: string; sectorName: string; roleName: "Admin" | "Coordenador" | "Usuario" }>;
   }>>;
+
+  // Directory
+  getDirectory(options: {
+    userId: string;
+    sectorId?: string;
+    query?: string;
+    showAll?: boolean;
+  }): Promise<Array<{
+    id: string;
+    name: string;
+    email: string;
+    whatsapp: string | null;
+    photoUrl: string | null;
+    roles: Array<{ sectorId: string; sectorName: string; roleName: "Admin" | "Coordenador" | "Usuario" }>;
+  }>>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -611,6 +626,94 @@ export class DatabaseStorage implements IStorage {
     }
 
     return teammates.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async getDirectory(options: {
+    userId: string;
+    sectorId?: string;
+    query?: string;
+    showAll?: boolean;
+  }): Promise<Array<{
+    id: string;
+    name: string;
+    email: string;
+    whatsapp: string | null;
+    photoUrl: string | null;
+    roles: Array<{ sectorId: string; sectorName: string; roleName: "Admin" | "Coordenador" | "Usuario" }>;
+  }>> {
+    let targetSectorIds: string[] = [];
+
+    if (options.showAll) {
+      // Get all sectors
+      const allSectors = await db.select({ id: sectors.id }).from(sectors);
+      targetSectorIds = allSectors.map(s => s.id);
+    } else if (options.sectorId) {
+      // Use specific sector
+      targetSectorIds = [options.sectorId];
+    } else {
+      // Get user's sectors
+      const userSectorIds = await db
+        .select({ sectorId: userSectorRoles.sectorId })
+        .from(userSectorRoles)
+        .where(eq(userSectorRoles.userId, options.userId));
+      targetSectorIds = userSectorIds.map(s => s.sectorId);
+    }
+
+    if (targetSectorIds.length === 0) {
+      return [];
+    }
+
+    // Get all users in target sectors
+    const userIds = await db
+      .selectDistinct({ userId: userSectorRoles.userId })
+      .from(userSectorRoles)
+      .where(inArray(userSectorRoles.sectorId, targetSectorIds));
+
+    const result: Array<{
+      id: string;
+      name: string;
+      email: string;
+      whatsapp: string | null;
+      photoUrl: string | null;
+      roles: Array<{ sectorId: string; sectorName: string; roleName: "Admin" | "Coordenador" | "Usuario" }>;
+    }> = [];
+
+    const searchQuery = options.query?.toLowerCase().trim();
+
+    for (const { userId } of userIds) {
+      const [user] = await db.select().from(users).where(eq(users.id, userId));
+      if (!user || !user.isActive) continue;
+
+      // Apply search filter
+      if (searchQuery) {
+        const matchesName = user.name.toLowerCase().includes(searchQuery);
+        const matchesEmail = user.email.toLowerCase().includes(searchQuery);
+        const matchesWhatsapp = user.whatsapp?.toLowerCase().includes(searchQuery);
+        if (!matchesName && !matchesEmail && !matchesWhatsapp) continue;
+      }
+
+      const userRoles = await db
+        .select({
+          sectorId: userSectorRoles.sectorId,
+          sectorName: sectors.name,
+          roleName: roles.name,
+        })
+        .from(userSectorRoles)
+        .innerJoin(sectors, eq(userSectorRoles.sectorId, sectors.id))
+        .innerJoin(roles, eq(userSectorRoles.roleId, roles.id))
+        .where(eq(userSectorRoles.userId, userId));
+
+      result.push({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        whatsapp: user.whatsapp,
+        photoUrl: user.photoUrl,
+        roles: userRoles as Array<{ sectorId: string; sectorName: string; roleName: "Admin" | "Coordenador" | "Usuario" }>,
+      });
+    }
+
+    return result.sort((a, b) => a.name.localeCompare(b.name));
   }
 }
 

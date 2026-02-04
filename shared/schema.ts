@@ -7,6 +7,7 @@ import { z } from "zod";
 export const roleEnum = pgEnum("role_type", ["Admin", "Coordenador", "Usuario"]);
 export const resourceTypeEnum = pgEnum("resource_type", ["APP", "DASHBOARD"]);
 export const embedModeEnum = pgEnum("embed_mode", ["LINK", "IFRAME", "POWERBI"]);
+export const openBehaviorEnum = pgEnum("open_behavior", ["HUB_ONLY", "NEW_TAB_ONLY", "BOTH"]);
 export const overrideEffectEnum = pgEnum("override_effect", ["ALLOW", "DENY"]);
 export const healthStatusEnum = pgEnum("health_status", ["UP", "DEGRADED", "DOWN"]);
 
@@ -53,6 +54,7 @@ export const resources = pgTable("resources", {
   icon: varchar("icon", { length: 100 }).default("Layout"),
   tags: text("tags").array().default(sql`ARRAY[]::text[]`),
   embedMode: embedModeEnum("embed_mode").notNull().default("LINK"),
+  openBehavior: openBehaviorEnum("open_behavior").notNull().default("BOTH"),
   url: text("url"),
   metadata: jsonb("metadata").$type<Record<string, any>>().default({}),
   isActive: boolean("is_active").notNull().default(true),

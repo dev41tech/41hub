@@ -26,7 +26,7 @@ export default function Login() {
           <div className="flex justify-center mb-4">
             <ThemeLogo className="h-12 w-auto" />
           </div>
-          <CardTitle className="text-2xl">41 Hub — Portal Corporativo</CardTitle>
+          <CardTitle className="text-2xl">Portal Corporativo</CardTitle>
           <CardDescription>
             Faça login com sua conta Microsoft para continuar.
           </CardDescription>

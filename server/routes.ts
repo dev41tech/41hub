@@ -51,6 +51,7 @@ const createUserSchema = z.object({
   email: z.string().email().max(255),
   name: z.string().min(1).max(255),
   sectorId: z.string().uuid().optional(),
+  sectorIds: z.array(z.string().uuid()).optional(),
   roleName: z.enum(["Admin", "Coordenador", "Usuario"]).optional(),
 });
 
@@ -58,6 +59,8 @@ const updateUserSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   isActive: z.boolean().optional(),
   themePref: z.enum(["light", "dark"]).optional(),
+  sectorIds: z.array(z.string().uuid()).optional(),
+  roleName: z.enum(["Admin", "Coordenador", "Usuario"]).optional(),
 });
 
 const createResourceSchema = z.object({
@@ -65,6 +68,7 @@ const createResourceSchema = z.object({
   type: z.enum(["APP", "DASHBOARD"]),
   sectorId: z.string().uuid().nullable().optional(),
   embedMode: z.enum(["LINK", "IFRAME", "POWERBI"]).optional(),
+  openBehavior: z.enum(["HUB_ONLY", "NEW_TAB_ONLY", "BOTH"]).optional(),
   url: z.string().url().nullable().optional(),
   tags: z.array(z.string()).optional(),
   icon: z.string().max(100).optional(),
@@ -310,6 +314,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (error) {
       console.error("Error fetching team:", error);
       res.status(500).json({ error: "Failed to fetch team" });
+    }
+  });
+
+  // Get directory of users (with filtering)
+  app.get("/api/users/directory", requireAuth, async (req, res) => {
+    try {
+      const sectorId = req.query.sectorId as string | undefined;
+      const query = req.query.q as string | undefined;
+      const showAll = req.query.all === "true";
+
+      const directory = await storage.getDirectory({
+        userId: req.user!.id,
+        sectorId,
+        query,
+        showAll,
+      });
+
+      res.json(directory);
+    } catch (error) {
+      console.error("Error fetching directory:", error);
+      res.status(500).json({ error: "Failed to fetch directory" });
     }
   });
 
@@ -572,20 +597,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ error: "Invalid data", details: parsed.error.errors });
       }
 
-      const { email, name, sectorId, roleName } = parsed.data;
+      const { email, name, sectorId, sectorIds, roleName } = parsed.data;
 
       // Create user
       const user = await storage.createUser({ email, name });
 
-      // If sector and role specified, add user to sector with role
-      if (sectorId && roleName) {
+      // Handle sectorIds array (multi-sector support) or fallback to single sectorId
+      const sectorsToAssign = sectorIds && sectorIds.length > 0 
+        ? sectorIds 
+        : (sectorId ? [sectorId] : []);
+
+      if (sectorsToAssign.length > 0 && roleName) {
         const role = await storage.getRoleByName(roleName);
         if (role) {
-          await storage.addUserSectorRole({
-            userId: user.id,
-            sectorId,
-            roleId: role.id,
-          });
+          for (const sid of sectorsToAssign) {
+            await storage.addUserSectorRole({
+              userId: user.id,
+              sectorId: sid,
+              roleId: role.id,
+            });
+          }
         }
       }
 
@@ -594,7 +625,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         action: "user_create",
         targetType: "user",
         targetId: user.id,
-        metadata: { email, name },
+        metadata: { email, name, sectorIds: sectorsToAssign },
         ip: req.ip || req.socket.remoteAddress,
       });
 
@@ -613,18 +644,45 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ error: "Invalid data", details: parsed.error.errors });
       }
 
-      const user = await storage.updateUser(req.params.id, parsed.data);
+      const { sectorIds, roleName, ...userUpdates } = parsed.data;
+      const userId = req.params.id as string;
+
+      // Update basic user info if provided
+      if (Object.keys(userUpdates).length > 0) {
+        await storage.updateUser(userId, userUpdates);
+      }
+
+      // Handle sector reassignment if sectorIds provided
+      if (sectorIds !== undefined && roleName) {
+        // Remove existing sector-role assignments
+        const existingRoles = await storage.getUserSectorRoles(userId);
+        for (const existing of existingRoles) {
+          await storage.removeUserSectorRole(userId, existing.sectorId);
+        }
+
+        // Add new sector-role assignments
+        const role = await storage.getRoleByName(roleName);
+        if (role && sectorIds.length > 0) {
+          for (const sectorId of sectorIds) {
+            await storage.addUserSectorRole({
+              userId,
+              sectorId,
+              roleId: role.id,
+            });
+          }
+        }
+      }
 
       await storage.createAuditLog({
         actorUserId: req.user!.id,
         action: "user_update",
         targetType: "user",
-        targetId: req.params.id,
+        targetId: userId,
         metadata: parsed.data,
         ip: req.ip || req.socket.remoteAddress,
       });
 
-      const userWithRoles = await storage.getUserWithRoles(req.params.id);
+      const userWithRoles = await storage.getUserWithRoles(userId);
       res.json(userWithRoles);
     } catch (error) {
       console.error("Error updating user:", error);

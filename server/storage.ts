@@ -11,6 +11,7 @@ import {
   recentAccess,
   auditLogs,
   healthChecks,
+  adminSettings,
   type User,
   type InsertUser,
   type Sector,
@@ -29,6 +30,7 @@ import {
   type HealthCheck,
   type UserWithRoles,
   type ResourceWithHealth,
+  type AdminSetting,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -119,6 +121,11 @@ export interface IStorage {
     photoUrl: string | null;
     roles: Array<{ sectorId: string; sectorName: string; roleName: "Admin" | "Coordenador" | "Usuario" }>;
   }>>;
+
+  // Admin Settings
+  getSetting(key: string): Promise<AdminSetting | undefined>;
+  setSetting(key: string, value: string): Promise<AdminSetting>;
+  getAllSettings(): Promise<AdminSetting[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -714,6 +721,33 @@ export class DatabaseStorage implements IStorage {
     }
 
     return result.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // Admin Settings
+  async getSetting(key: string): Promise<AdminSetting | undefined> {
+    const [setting] = await db.select().from(adminSettings).where(eq(adminSettings.key, key));
+    return setting;
+  }
+
+  async setSetting(key: string, value: string): Promise<AdminSetting> {
+    const existing = await this.getSetting(key);
+    if (existing) {
+      const [updated] = await db
+        .update(adminSettings)
+        .set({ value, updatedAt: new Date() })
+        .where(eq(adminSettings.key, key))
+        .returning();
+      return updated;
+    }
+    const [created] = await db
+      .insert(adminSettings)
+      .values({ key, value })
+      .returning();
+    return created;
+  }
+
+  async getAllSettings(): Promise<AdminSetting[]> {
+    return db.select().from(adminSettings);
   }
 }
 

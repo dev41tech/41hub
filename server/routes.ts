@@ -5,8 +5,26 @@ import { z } from "zod";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import type { UserWithRoles } from "@shared/schema";
+
+const SALT_ROUNDS = 12;
+const DEFAULT_PASSWORD = "41Tech@2026";
+const DEFAULT_PASSWORD_SETTING_KEY = "DEFAULT_LOCAL_PASSWORD";
+
+// Password validation: min 10 chars, 1 upper, 1 lower, 1 number, 1 special
+const passwordSchema = z.string()
+  .min(10, "Senha deve ter no mínimo 10 caracteres")
+  .regex(/[A-Z]/, "Senha deve conter pelo menos uma letra maiúscula")
+  .regex(/[a-z]/, "Senha deve conter pelo menos uma letra minúscula")
+  .regex(/[0-9]/, "Senha deve conter pelo menos um número")
+  .regex(/[!@#$%^&*(),.?":{}|<>]/, "Senha deve conter pelo menos um caractere especial");
+
+// Rate limiting store (simple in-memory for now)
+const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+const MAX_LOGIN_ATTEMPTS = 10;
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
 
 // Configure multer for photo uploads
 const uploadDir = path.join(process.cwd(), "uploads");
@@ -53,6 +71,7 @@ const createUserSchema = z.object({
   sectorId: z.string().uuid().optional(),
   sectorIds: z.array(z.string().uuid()).optional(),
   roleName: z.enum(["Admin", "Coordenador", "Usuario"]).optional(),
+  authProvider: z.enum(["entra", "local"]).optional().default("entra"),
 });
 
 const updateUserSchema = z.object({
@@ -231,6 +250,175 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.clearCookie("connect.sid");
       res.json({ success: true });
     });
+  });
+
+  // ==================== LOCAL AUTH ROUTES ====================
+
+  // Local login
+  app.post("/api/auth/local/login", async (req, res) => {
+    try {
+      const ip = req.ip || req.socket.remoteAddress || "unknown";
+      
+      // Rate limiting
+      const now = Date.now();
+      const attempts = loginAttempts.get(ip);
+      if (attempts) {
+        if (now < attempts.resetAt) {
+          if (attempts.count >= MAX_LOGIN_ATTEMPTS) {
+            return res.status(429).json({ error: "Muitas tentativas de login. Tente novamente em 1 minuto." });
+          }
+        } else {
+          loginAttempts.set(ip, { count: 0, resetAt: now + RATE_LIMIT_WINDOW });
+        }
+      } else {
+        loginAttempts.set(ip, { count: 0, resetAt: now + RATE_LIMIT_WINDOW });
+      }
+
+      const loginSchema = z.object({
+        email: z.string().email(),
+        password: z.string().min(1),
+      });
+
+      const parsed = loginSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Email e senha são obrigatórios" });
+      }
+
+      const { email, password } = parsed.data;
+
+      const user = await storage.getUserByEmail(email);
+
+      // Increment attempts
+      const currentAttempts = loginAttempts.get(ip)!;
+      currentAttempts.count++;
+
+      if (!user) {
+        await storage.createAuditLog({
+          actorUserId: null,
+          action: "local_login_failed",
+          metadata: { email, reason: "user_not_found" },
+          ip,
+        });
+        return res.status(401).json({ error: "Email ou senha incorretos" });
+      }
+
+      if (user.authProvider !== "local") {
+        await storage.createAuditLog({
+          actorUserId: user.id,
+          action: "local_login_failed",
+          metadata: { reason: "wrong_auth_provider" },
+          ip,
+        });
+        return res.status(401).json({ error: "Use o login Microsoft para esta conta" });
+      }
+
+      if (!user.isActive) {
+        await storage.createAuditLog({
+          actorUserId: user.id,
+          action: "local_login_failed",
+          metadata: { reason: "account_inactive" },
+          ip,
+        });
+        return res.status(401).json({ error: "Conta desativada. Contate o administrador." });
+      }
+
+      if (!user.passwordHash) {
+        await storage.createAuditLog({
+          actorUserId: user.id,
+          action: "local_login_failed",
+          metadata: { reason: "no_password_set" },
+          ip,
+        });
+        return res.status(401).json({ error: "Senha não configurada. Contate o administrador." });
+      }
+
+      const passwordMatch = await bcrypt.compare(password, user.passwordHash);
+      if (!passwordMatch) {
+        await storage.createAuditLog({
+          actorUserId: user.id,
+          action: "local_login_failed",
+          metadata: { reason: "wrong_password" },
+          ip,
+        });
+        return res.status(401).json({ error: "Email ou senha incorretos" });
+      }
+
+      // Success - reset rate limit
+      loginAttempts.delete(ip);
+
+      req.session.userId = user.id;
+
+      await storage.createAuditLog({
+        actorUserId: user.id,
+        action: "local_login_success",
+        ip,
+      });
+
+      const userWithRoles = await storage.getUserWithRoles(user.id);
+      res.json(userWithRoles);
+    } catch (error) {
+      console.error("Local login error:", error);
+      res.status(500).json({ error: "Erro interno ao fazer login" });
+    }
+  });
+
+  // Change password (for local users)
+  app.post("/api/auth/local/change-password", requireAuth, async (req, res) => {
+    try {
+      if (req.user!.authProvider !== "local") {
+        return res.status(400).json({ error: "Apenas usuários locais podem alterar senha por aqui" });
+      }
+
+      const changePasswordSchema = z.object({
+        currentPassword: z.string().optional(),
+        newPassword: passwordSchema,
+      });
+
+      const parsed = changePasswordSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos", details: parsed.error.errors });
+      }
+
+      const { currentPassword, newPassword } = parsed.data;
+      const user = await storage.getUser(req.user!.id);
+
+      if (!user || !user.passwordHash) {
+        return res.status(400).json({ error: "Usuário não encontrado ou senha não configurada" });
+      }
+
+      // If not forced to change password, require current password
+      if (!user.mustChangePassword) {
+        if (!currentPassword) {
+          return res.status(400).json({ error: "Senha atual é obrigatória" });
+        }
+        const currentMatch = await bcrypt.compare(currentPassword, user.passwordHash);
+        if (!currentMatch) {
+          return res.status(401).json({ error: "Senha atual incorreta" });
+        }
+      }
+
+      const newPasswordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+
+      await storage.updateUser(user.id, {
+        passwordHash: newPasswordHash,
+        mustChangePassword: false,
+        passwordUpdatedAt: new Date(),
+      } as any);
+
+      await storage.createAuditLog({
+        actorUserId: user.id,
+        action: "local_password_changed",
+        targetType: "user",
+        targetId: user.id,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      const userWithRoles = await storage.getUserWithRoles(user.id);
+      res.json(userWithRoles);
+    } catch (error) {
+      console.error("Change password error:", error);
+      res.status(500).json({ error: "Erro ao alterar senha" });
+    }
   });
 
   // ==================== USER ROUTES ====================
@@ -488,6 +676,60 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ==================== ADMIN ROUTES ====================
 
+  // --- Settings ---
+  app.get("/api/admin/settings", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const allSettings = await storage.getAllSettings();
+      const settingsMap: Record<string, string> = {};
+      for (const s of allSettings) {
+        settingsMap[s.key] = s.value;
+      }
+      // Provide default if not set
+      if (!settingsMap[DEFAULT_PASSWORD_SETTING_KEY]) {
+        settingsMap[DEFAULT_PASSWORD_SETTING_KEY] = DEFAULT_PASSWORD;
+      }
+      res.json(settingsMap);
+    } catch (error) {
+      console.error("Error fetching settings:", error);
+      res.status(500).json({ error: "Failed to fetch settings" });
+    }
+  });
+
+  app.patch("/api/admin/settings", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const settingsSchema = z.object({
+        DEFAULT_LOCAL_PASSWORD: z.string().min(1).optional(),
+      });
+
+      const parsed = settingsSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid data", details: parsed.error.errors });
+      }
+
+      if (parsed.data.DEFAULT_LOCAL_PASSWORD) {
+        await storage.setSetting(DEFAULT_PASSWORD_SETTING_KEY, parsed.data.DEFAULT_LOCAL_PASSWORD);
+      }
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "settings_update",
+        metadata: { keys: Object.keys(parsed.data) },
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      // Return updated settings
+      const allSettings = await storage.getAllSettings();
+      const settingsMap: Record<string, string> = {};
+      for (const s of allSettings) {
+        settingsMap[s.key] = s.value;
+      }
+      res.json(settingsMap);
+    } catch (error) {
+      console.error("Error updating settings:", error);
+      res.status(500).json({ error: "Failed to update settings" });
+    }
+  });
+
   // Admin stats
   app.get("/api/admin/stats", requireAuth, requireAdmin, async (req, res) => {
     try {
@@ -597,10 +839,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ error: "Invalid data", details: parsed.error.errors });
       }
 
-      const { email, name, sectorId, sectorIds, roleName } = parsed.data;
+      const { email, name, sectorId, sectorIds, roleName, authProvider } = parsed.data;
+
+      // For local users, set password hash from default password
+      let passwordHash: string | undefined;
+      let mustChangePassword = false;
+
+      if (authProvider === "local") {
+        const defaultPwdSetting = await storage.getSetting(DEFAULT_PASSWORD_SETTING_KEY);
+        const defaultPassword = defaultPwdSetting?.value || DEFAULT_PASSWORD;
+        passwordHash = await bcrypt.hash(defaultPassword, SALT_ROUNDS);
+        mustChangePassword = true;
+      }
 
       // Create user
-      const user = await storage.createUser({ email, name });
+      const user = await storage.createUser({ 
+        email, 
+        name, 
+        authProvider: authProvider || "entra",
+        passwordHash,
+        mustChangePassword,
+      } as any);
 
       // Handle sectorIds array (multi-sector support) or fallback to single sectorId
       const sectorsToAssign = sectorIds && sectorIds.length > 0 
@@ -689,6 +948,91 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (error) {
       console.error("Error updating user:", error);
       res.status(500).json({ error: "Failed to update user" });
+    }
+  });
+
+  // Reset password (for local users only)
+  app.post("/api/admin/users/:id/reset-password", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const userId = req.params.id;
+      const user = await storage.getUser(userId);
+
+      if (!user) {
+        return res.status(404).json({ error: "Usuário não encontrado" });
+      }
+
+      if (user.authProvider !== "local") {
+        return res.status(400).json({ error: "Apenas usuários locais podem ter senha resetada" });
+      }
+
+      const defaultPwdSetting = await storage.getSetting(DEFAULT_PASSWORD_SETTING_KEY);
+      const defaultPassword = defaultPwdSetting?.value || DEFAULT_PASSWORD;
+      const passwordHash = await bcrypt.hash(defaultPassword, SALT_ROUNDS);
+
+      await storage.updateUser(userId, {
+        passwordHash,
+        mustChangePassword: true,
+        passwordUpdatedAt: null,
+      } as any);
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "user_password_reset",
+        targetType: "user",
+        targetId: userId,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error resetting password:", error);
+      res.status(500).json({ error: "Falha ao resetar senha" });
+    }
+  });
+
+  // Set password (admin can set password for local users)
+  app.post("/api/admin/users/:id/set-password", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const userId = req.params.id;
+      const user = await storage.getUser(userId);
+
+      if (!user) {
+        return res.status(404).json({ error: "Usuário não encontrado" });
+      }
+
+      if (user.authProvider !== "local") {
+        return res.status(400).json({ error: "Apenas usuários locais podem ter senha definida" });
+      }
+
+      const setPasswordSchema = z.object({
+        newPassword: passwordSchema,
+      });
+
+      const parsed = setPasswordSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Senha inválida", details: parsed.error.errors });
+      }
+
+      const passwordHash = await bcrypt.hash(parsed.data.newPassword, SALT_ROUNDS);
+
+      await storage.updateUser(userId, {
+        passwordHash,
+        mustChangePassword: false,
+        passwordUpdatedAt: new Date(),
+      } as any);
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "user_password_set",
+        targetType: "user",
+        targetId: userId,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error setting password:", error);
+      res.status(500).json({ error: "Falha ao definir senha" });
     }
   });
 

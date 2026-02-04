@@ -15,10 +15,12 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Skeleton } from "@/components/ui/skeleton";
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
+import LocalLogin from "@/pages/local-login";
 import Home from "@/pages/home";
 import Apps from "@/pages/apps";
 import Dashboards from "@/pages/dashboards";
 import Favorites from "@/pages/favorites";
+import Profile from "@/pages/profile";
 import ResourceViewer from "@/pages/resource-viewer";
 import AdminIndex from "@/pages/admin/index";
 import AdminSectors from "@/pages/admin/sectors";
@@ -33,6 +35,7 @@ function Router() {
       <Route path="/apps" component={Apps} />
       <Route path="/dashboards" component={Dashboards} />
       <Route path="/favorites" component={Favorites} />
+      <Route path="/profile" component={Profile} />
       <Route path="/resource/:id" component={ResourceViewer} />
       <Route path="/admin" component={AdminIndex} />
       <Route path="/admin/sectors" component={AdminSectors} />
@@ -75,9 +78,11 @@ function AppContent() {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background">
         <div className="flex flex-col items-center gap-4">
-          <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-primary text-primary-foreground font-bold text-2xl">
-            41
-          </div>
+          <img 
+            src="/41tech-logo.png" 
+            alt="41 Tech" 
+            className="h-12 w-auto" 
+          />
           <div className="flex flex-col items-center gap-2">
             <Skeleton className="h-4 w-32" />
             <Skeleton className="h-3 w-24" />
@@ -88,7 +93,12 @@ function AppContent() {
   }
 
   if (!isAuthenticated) {
-    return <Login />;
+    return (
+      <Switch>
+        <Route path="/login/local" component={LocalLogin} />
+        <Route component={Login} />
+      </Switch>
+    );
   }
 
   return <AuthenticatedLayout />;

@@ -61,9 +61,11 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary text-primary-foreground font-bold text-lg">
-            41
-          </div>
+          <img 
+            src="/41tech-logo.png" 
+            alt="41 Tech" 
+            className="h-8 w-auto" 
+          />
           <div className="flex flex-col">
             <span className="font-semibold text-sidebar-foreground">41 Hub</span>
             <span className="text-xs text-muted-foreground">Portal Corporativo</span>
@@ -144,10 +146,12 @@ export function AppSidebar() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
-              <DropdownMenuItem data-testid="menu-profile">
-                <User className="mr-2 h-4 w-4" />
-                <span>Perfil</span>
-              </DropdownMenuItem>
+              <Link href="/profile">
+                <DropdownMenuItem data-testid="menu-profile" className="cursor-pointer">
+                  <User className="mr-2 h-4 w-4" />
+                  <span>Perfil</span>
+                </DropdownMenuItem>
+              </Link>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={logout}

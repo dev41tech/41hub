@@ -196,6 +196,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
   });
 
+  // ==================== USER ROUTES ====================
+
+  // Update current user preferences (theme)
+  app.patch("/api/users/me", requireAuth, async (req, res) => {
+    try {
+      const themePrefSchema = z.object({
+        themePref: z.enum(["light", "dark"]),
+      });
+
+      const parsed = themePrefSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid data", details: parsed.error.errors });
+      }
+
+      const user = await storage.updateUser(req.user!.id, { themePref: parsed.data.themePref });
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "user_update_theme",
+        targetType: "user",
+        targetId: req.user!.id,
+        metadata: { themePref: parsed.data.themePref },
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      const userWithRoles = await storage.getUserWithRoles(req.user!.id);
+      res.json(userWithRoles);
+    } catch (error) {
+      console.error("Error updating user preferences:", error);
+      res.status(500).json({ error: "Failed to update preferences" });
+    }
+  });
+
   // ==================== RESOURCE ROUTES ====================
 
   // Get all resources for current user

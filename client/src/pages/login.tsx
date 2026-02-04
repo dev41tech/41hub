@@ -3,6 +3,7 @@ import { useTheme } from "@/lib/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, Moon, Sun } from "lucide-react";
+import { Link } from "wouter";
 
 export default function Login() {
   const { login, isLoading } = useAuth();
@@ -22,9 +23,11 @@ export default function Login() {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="flex justify-center mb-4">
-            <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-primary text-primary-foreground font-bold text-2xl">
-              41
-            </div>
+            <img 
+              src="/41tech-logo.png" 
+              alt="41 Tech" 
+              className="h-12 w-auto" 
+            />
           </div>
           <CardTitle className="text-2xl">41 Hub</CardTitle>
           <CardDescription>
@@ -61,6 +64,24 @@ export default function Login() {
               </>
             )}
           </Button>
+          <div className="relative my-4">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-card px-2 text-muted-foreground">ou</span>
+            </div>
+          </div>
+          <Link href="/login/local">
+            <Button
+              variant="outline"
+              className="w-full"
+              size="lg"
+              data-testid="button-login-local"
+            >
+              Entrar com usuário local
+            </Button>
+          </Link>
           <p className="text-xs text-muted-foreground text-center mt-4">
             Use suas credenciais corporativas da 41 Tech
           </p>

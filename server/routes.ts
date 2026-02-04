@@ -652,23 +652,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         await storage.updateUser(userId, userUpdates);
       }
 
-      // Handle sector reassignment if sectorIds provided
-      if (sectorIds !== undefined && roleName) {
+      // Handle sector reassignment if sectorIds provided (even empty array to clear all)
+      if (sectorIds !== undefined) {
         // Remove existing sector-role assignments
         const existingRoles = await storage.getUserSectorRoles(userId);
         for (const existing of existingRoles) {
           await storage.removeUserSectorRole(userId, existing.sectorId);
         }
 
-        // Add new sector-role assignments
-        const role = await storage.getRoleByName(roleName);
-        if (role && sectorIds.length > 0) {
-          for (const sectorId of sectorIds) {
-            await storage.addUserSectorRole({
-              userId,
-              sectorId,
-              roleId: role.id,
-            });
+        // Add new sector-role assignments if any sectors selected
+        if (sectorIds.length > 0 && roleName) {
+          const role = await storage.getRoleByName(roleName);
+          if (role) {
+            for (const sectorId of sectorIds) {
+              await storage.addUserSectorRole({
+                userId,
+                sectorId,
+                roleId: role.id,
+              });
+            }
           }
         }
       }

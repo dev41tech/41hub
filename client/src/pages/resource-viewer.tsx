@@ -1,7 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
-import { ArrowLeft, ExternalLink, Star, AlertCircle } from "lucide-react";
+import { ArrowLeft, ExternalLink, Star, AlertCircle, Monitor, Layout } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -9,6 +9,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import type { ResourceWithHealth } from "@shared/schema";
+
+type OpenBehavior = "HUB_ONLY" | "NEW_TAB_ONLY" | "BOTH";
 
 const getStatusColor = (status?: "UP" | "DEGRADED" | "DOWN") => {
   switch (status) {
@@ -66,11 +68,20 @@ export default function ResourceViewer() {
     },
   });
 
+  const openBehavior = (resource?.openBehavior as OpenBehavior) || "BOTH";
+  const hasOpenedInNewTab = useRef<string | null>(null);
+
   useEffect(() => {
     if (resource) {
       recordAccessMutation.mutate();
+      
+      // Auto-redirect to new tab if openBehavior is NEW_TAB_ONLY (once per resource)
+      if (openBehavior === "NEW_TAB_ONLY" && resource.url && hasOpenedInNewTab.current !== resource.id) {
+        hasOpenedInNewTab.current = resource.id;
+        window.open(resource.url, "_blank");
+      }
     }
-  }, [resource?.id]);
+  }, [resource?.id, openBehavior]);
 
   if (isLoading) {
     return (
@@ -115,6 +126,39 @@ export default function ResourceViewer() {
     );
   }
 
+  const renderNewTabOnlyMessage = () => (
+    <div className="flex flex-col items-center justify-center h-full p-6">
+      <Card className="max-w-lg w-full">
+        <CardContent className="flex flex-col items-center gap-4 p-6 text-center">
+          <div
+            className={cn(
+              "flex h-16 w-16 items-center justify-center rounded-lg",
+              resource.type === "APP"
+                ? "bg-primary/10 text-primary"
+                : "bg-chart-2/10 text-chart-2"
+            )}
+          >
+            <ExternalLink className="h-8 w-8" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold">{resource.name}</h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              Este recurso foi aberto em uma nova aba
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => window.open(resource.url!, "_blank")}
+            data-testid="button-open-external"
+          >
+            <ExternalLink className="h-4 w-4 mr-2" />
+            Abrir novamente
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+
   const renderContent = () => {
     if (resource.healthStatus === "DOWN") {
       return (
@@ -128,6 +172,31 @@ export default function ResourceViewer() {
                 <h2 className="text-lg font-semibold">Recurso indisponível</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Este recurso está temporariamente fora do ar. Por favor, tente novamente mais tarde.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
+
+    // NEW_TAB_ONLY: Show confirmation message for all embed modes
+    if (openBehavior === "NEW_TAB_ONLY") {
+      if (resource.url) {
+        return renderNewTabOnlyMessage();
+      }
+      // NEW_TAB_ONLY without URL - show not configured message
+      return (
+        <div className="flex flex-col items-center justify-center h-full p-6">
+          <Card className="max-w-md w-full">
+            <CardContent className="flex flex-col items-center gap-4 p-6 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+                <AlertCircle className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold">Recurso não configurado</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Este recurso está configurado para abrir em nova aba, mas a URL não foi definida.
                 </p>
               </div>
             </CardContent>
@@ -166,7 +235,7 @@ export default function ResourceViewer() {
               <p className="text-xs text-muted-foreground">
                 A integração completa do Power BI será configurada quando as credenciais estiverem disponíveis.
               </p>
-              {resource.url && (
+              {resource.url && openBehavior !== "HUB_ONLY" && (
                 <Button
                   variant="outline"
                   onClick={() => window.open(resource.url!, "_blank")}
@@ -196,13 +265,9 @@ export default function ResourceViewer() {
                 )}
               >
                 {resource.type === "APP" ? (
-                  <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                  </svg>
+                  <Monitor className="h-8 w-8" />
                 ) : (
-                  <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                  </svg>
+                  <Layout className="h-8 w-8" />
                 )}
               </div>
               <div>
@@ -213,13 +278,20 @@ export default function ResourceViewer() {
                   </p>
                 )}
               </div>
-              <Button
-                onClick={() => window.open(resource.url!, "_blank")}
-                data-testid="button-open-external"
-              >
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Abrir em nova aba
-              </Button>
+              {openBehavior !== "HUB_ONLY" && (
+                <Button
+                  onClick={() => window.open(resource.url!, "_blank")}
+                  data-testid="button-open-external"
+                >
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  Abrir em nova aba
+                </Button>
+              )}
+              {openBehavior === "HUB_ONLY" && (
+                <p className="text-xs text-muted-foreground">
+                  Este recurso pode ser acessado apenas através do Hub
+                </p>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -297,7 +369,7 @@ export default function ResourceViewer() {
               )}
             />
           </Button>
-          {resource.url && resource.embedMode !== "LINK" && (
+          {resource.url && resource.embedMode !== "LINK" && openBehavior !== "HUB_ONLY" && (
             <Button
               variant="ghost"
               size="icon"

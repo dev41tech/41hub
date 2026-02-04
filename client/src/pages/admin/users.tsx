@@ -144,7 +144,7 @@ export default function AdminUsers() {
       updateMutation.mutate({ 
         id: editingUser.id, 
         name: formName,
-        sectorIds: formSectorIds.length > 0 ? formSectorIds : undefined,
+        sectorIds: formSectorIds,
         roleName: formRoleName,
       });
     } else {

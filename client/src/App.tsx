@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
 import LocalLogin from "@/pages/local-login";
+import { PasswordChangeModal } from "@/components/password-change-modal";
 import Home from "@/pages/home";
 import Apps from "@/pages/apps";
 import Dashboards from "@/pages/dashboards";
@@ -98,7 +99,12 @@ function AppContent() {
     );
   }
 
-  return <AuthenticatedLayout />;
+  return (
+    <>
+      <PasswordChangeModal />
+      <AuthenticatedLayout />
+    </>
+  );
 }
 
 function App() {

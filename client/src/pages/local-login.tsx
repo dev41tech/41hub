@@ -33,15 +33,16 @@ export default function LocalLogin() {
       });
 
       if (!response.ok) {
-        throw new Error("Login inválido");
+        const data = await response.json();
+        throw new Error(data.error || "Login inválido");
       }
 
       await refreshUser();
       setLocation("/");
-    } catch (error) {
+    } catch (error: any) {
       toast({
         title: "Erro de autenticação",
-        description: "E-mail ou senha inválidos. Tente novamente.",
+        description: error.message || "E-mail ou senha inválidos. Tente novamente.",
         variant: "destructive",
       });
     } finally {

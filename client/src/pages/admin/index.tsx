@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Shield,
   Clock,
+  Settings,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -60,6 +61,13 @@ const adminSections = [
     icon: FileText,
     href: "/admin/audit",
     color: "bg-chart-4/10 text-chart-4",
+  },
+  {
+    title: "Configurações",
+    description: "Configurações do sistema",
+    icon: Settings,
+    href: "/admin/settings",
+    color: "bg-chart-5/10 text-chart-5",
   },
 ];
 

@@ -29,6 +29,7 @@ import AdminSectors from "@/pages/admin/sectors";
 import AdminUsers from "@/pages/admin/users";
 import AdminResources from "@/pages/admin/resources";
 import AdminAudit from "@/pages/admin/audit";
+import AdminSettings from "@/pages/admin/settings";
 
 function Router() {
   return (
@@ -44,6 +45,7 @@ function Router() {
       <Route path="/admin/users" component={AdminUsers} />
       <Route path="/admin/resources" component={AdminResources} />
       <Route path="/admin/audit" component={AdminAudit} />
+      <Route path="/admin/settings" component={AdminSettings} />
       <Route component={NotFound} />
     </Switch>
   );

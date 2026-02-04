@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Pencil, Users, Shield, Check, KeyRound, RotateCcw, Building2 } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Users, Shield, Check, KeyRound, RotateCcw, Building2, X } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,6 +38,19 @@ import { SearchInput } from "@/components/search-input";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { UserWithRoles, Sector } from "@shared/schema";
+
+interface PasswordRequirement {
+  label: string;
+  test: (password: string) => boolean;
+}
+
+const passwordRequirements: PasswordRequirement[] = [
+  { label: "Mínimo 10 caracteres", test: (p) => p.length >= 10 },
+  { label: "Uma letra maiúscula", test: (p) => /[A-Z]/.test(p) },
+  { label: "Uma letra minúscula", test: (p) => /[a-z]/.test(p) },
+  { label: "Um número", test: (p) => /[0-9]/.test(p) },
+  { label: "Um caractere especial (!@#$%^&*)", test: (p) => /[!@#$%^&*(),.?":{}|<>]/.test(p) },
+];
 
 export default function AdminUsers() {
   const { toast } = useToast();
@@ -200,9 +213,11 @@ export default function AdminUsers() {
     }
   };
 
+  const customPasswordValid = passwordRequirements.every((r) => r.test(customPassword));
+
   const handleSetPassword = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!passwordUser || !customPassword.trim()) return;
+    if (!passwordUser || !customPasswordValid) return;
     setPasswordMutation.mutate({ userId: passwordUser.id, password: customPassword });
   };
 
@@ -569,9 +584,25 @@ export default function AdminUsers() {
                   placeholder="Digite a nova senha"
                   data-testid="input-custom-password"
                 />
-                <p className="text-xs text-muted-foreground">
-                  Requisitos: mínimo 10 caracteres, 1 maiúscula, 1 minúscula, 1 número, 1 caractere especial
-                </p>
+                {customPassword && (
+                  <div className="space-y-1 text-sm mt-2">
+                    {passwordRequirements.map((req, i) => {
+                      const met = req.test(customPassword);
+                      return (
+                        <div key={i} className="flex items-center gap-2">
+                          {met ? (
+                            <Check className="h-4 w-4 text-green-500" />
+                          ) : (
+                            <X className="h-4 w-4 text-muted-foreground" />
+                          )}
+                          <span className={met ? "text-green-600" : "text-muted-foreground"}>
+                            {req.label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
             <DialogFooter>
@@ -588,7 +619,7 @@ export default function AdminUsers() {
               </Button>
               <Button
                 type="submit"
-                disabled={!customPassword.trim() || setPasswordMutation.isPending}
+                disabled={!customPasswordValid || setPasswordMutation.isPending}
                 data-testid="button-save-custom-password"
               >
                 Definir Senha

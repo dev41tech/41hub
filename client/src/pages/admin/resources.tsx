@@ -1,0 +1,525 @@
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { ArrowLeft, Plus, Pencil, Trash2, Layout, Monitor, BarChart3 } from "lucide-react";
+import { Link } from "wouter";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Skeleton } from "@/components/ui/skeleton";
+import { SearchInput } from "@/components/search-input";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { cn } from "@/lib/utils";
+import type { Resource, Sector } from "@shared/schema";
+
+type ResourceType = "APP" | "DASHBOARD";
+type EmbedMode = "LINK" | "IFRAME" | "POWERBI";
+
+interface ResourceFormData {
+  name: string;
+  type: ResourceType;
+  sectorId: string;
+  embedMode: EmbedMode;
+  url: string;
+  tags: string;
+  icon: string;
+  isActive: boolean;
+}
+
+const defaultFormData: ResourceFormData = {
+  name: "",
+  type: "APP",
+  sectorId: "",
+  embedMode: "LINK",
+  url: "",
+  tags: "",
+  icon: "Layout",
+  isActive: true,
+};
+
+export default function AdminResources() {
+  const { toast } = useToast();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeTab, setActiveTab] = useState<"all" | "APP" | "DASHBOARD">("all");
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [editingResource, setEditingResource] = useState<Resource | null>(null);
+  const [deletingResource, setDeletingResource] = useState<Resource | null>(null);
+  const [formData, setFormData] = useState<ResourceFormData>(defaultFormData);
+
+  const { data: resources = [], isLoading } = useQuery<Resource[]>({
+    queryKey: ["/api/admin/resources"],
+  });
+
+  const { data: sectors = [] } = useQuery<Sector[]>({
+    queryKey: ["/api/admin/sectors"],
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (data: Partial<Resource>) => {
+      return apiRequest("POST", "/api/admin/resources", data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/resources"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/resources"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/stats"] });
+      toast({ title: "Recurso criado com sucesso" });
+      handleCloseDialog();
+    },
+    onError: () => {
+      toast({ title: "Erro ao criar recurso", variant: "destructive" });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async ({ id, ...data }: Partial<Resource> & { id: string }) => {
+      return apiRequest("PATCH", `/api/admin/resources/${id}`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/resources"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/resources"] });
+      toast({ title: "Recurso atualizado com sucesso" });
+      handleCloseDialog();
+    },
+    onError: () => {
+      toast({ title: "Erro ao atualizar recurso", variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return apiRequest("DELETE", `/api/admin/resources/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/resources"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/resources"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/stats"] });
+      toast({ title: "Recurso excluído com sucesso" });
+      setIsDeleteOpen(false);
+      setDeletingResource(null);
+    },
+    onError: () => {
+      toast({ title: "Erro ao excluir recurso", variant: "destructive" });
+    },
+  });
+
+  const handleOpenCreate = () => {
+    setEditingResource(null);
+    setFormData(defaultFormData);
+    setIsDialogOpen(true);
+  };
+
+  const handleOpenEdit = (resource: Resource) => {
+    setEditingResource(resource);
+    setFormData({
+      name: resource.name,
+      type: resource.type as ResourceType,
+      sectorId: resource.sectorId || "",
+      embedMode: resource.embedMode as EmbedMode,
+      url: resource.url || "",
+      tags: resource.tags?.join(", ") || "",
+      icon: resource.icon || "Layout",
+      isActive: resource.isActive,
+    });
+    setIsDialogOpen(true);
+  };
+
+  const handleOpenDelete = (resource: Resource) => {
+    setDeletingResource(resource);
+    setIsDeleteOpen(true);
+  };
+
+  const handleCloseDialog = () => {
+    setIsDialogOpen(false);
+    setEditingResource(null);
+    setFormData(defaultFormData);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name.trim()) return;
+
+    const payload = {
+      name: formData.name,
+      type: formData.type,
+      sectorId: formData.sectorId || null,
+      embedMode: formData.embedMode,
+      url: formData.url || null,
+      tags: formData.tags.split(",").map((t) => t.trim()).filter(Boolean),
+      icon: formData.icon || "Layout",
+      isActive: formData.isActive,
+    };
+
+    if (editingResource) {
+      updateMutation.mutate({ id: editingResource.id, ...payload });
+    } else {
+      createMutation.mutate(payload);
+    }
+  };
+
+  const filteredResources = resources.filter((resource) => {
+    const matchesSearch =
+      resource.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      resource.tags?.some((t) => t.toLowerCase().includes(searchQuery.toLowerCase()));
+    const matchesTab = activeTab === "all" || resource.type === activeTab;
+    return matchesSearch && matchesTab;
+  });
+
+  const getSectorName = (sectorId: string | null) => {
+    if (!sectorId) return "-";
+    return sectors.find((s) => s.id === sectorId)?.name || "-";
+  };
+
+  return (
+    <div className="flex flex-col gap-6 p-6">
+      <div className="flex items-center gap-3">
+        <Link href="/admin">
+          <Button variant="ghost" size="icon" data-testid="button-back">
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        </Link>
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-chart-3/10">
+          <Layout className="h-5 w-5 text-chart-3" />
+        </div>
+        <div>
+          <h1 className="text-xl font-semibold text-foreground">Recursos</h1>
+          <p className="text-sm text-muted-foreground">
+            Gerencie aplicações e dashboards
+          </p>
+        </div>
+      </div>
+
+      <Card>
+        <CardHeader className="flex flex-col gap-4 pb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <CardTitle className="text-base font-medium">
+              {filteredResources.length} recurso{filteredResources.length !== 1 ? "s" : ""}
+            </CardTitle>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <SearchInput
+                value={searchQuery}
+                onChange={setSearchQuery}
+                placeholder="Buscar recursos..."
+                className="sm:w-64"
+              />
+              <Button onClick={handleOpenCreate} data-testid="button-create-resource">
+                <Plus className="h-4 w-4 mr-2" />
+                Novo Recurso
+              </Button>
+            </div>
+          </div>
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
+            <TabsList>
+              <TabsTrigger value="all">Todos</TabsTrigger>
+              <TabsTrigger value="APP">
+                <Monitor className="h-4 w-4 mr-1" />
+                Apps
+              </TabsTrigger>
+              <TabsTrigger value="DASHBOARD">
+                <BarChart3 className="h-4 w-4 mr-1" />
+                Dashboards
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-16 w-full" />
+              ))}
+            </div>
+          ) : filteredResources.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              {searchQuery ? "Nenhum recurso encontrado" : "Nenhum recurso cadastrado"}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Recurso</TableHead>
+                    <TableHead>Tipo</TableHead>
+                    <TableHead>Setor</TableHead>
+                    <TableHead>Modo</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="w-[100px]">Ações</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredResources.map((resource) => (
+                    <TableRow key={resource.id} data-testid={`row-resource-${resource.id}`}>
+                      <TableCell>
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={cn(
+                              "flex h-8 w-8 items-center justify-center rounded-md",
+                              resource.type === "APP"
+                                ? "bg-primary/10 text-primary"
+                                : "bg-chart-2/10 text-chart-2"
+                            )}
+                          >
+                            {resource.type === "APP" ? (
+                              <Monitor className="h-4 w-4" />
+                            ) : (
+                              <BarChart3 className="h-4 w-4" />
+                            )}
+                          </div>
+                          <div>
+                            <p className="font-medium">{resource.name}</p>
+                            {resource.tags && resource.tags.length > 0 && (
+                              <div className="flex gap-1 mt-0.5">
+                                {resource.tags.slice(0, 2).map((tag) => (
+                                  <Badge key={tag} variant="secondary" className="text-xs px-1 py-0">
+                                    {tag}
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={resource.type === "APP" ? "default" : "secondary"}>
+                          {resource.type}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {getSectorName(resource.sectorId)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{resource.embedMode}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <span className={resource.isActive ? "text-status-online" : "text-muted-foreground"}>
+                          {resource.isActive ? "Ativo" : "Inativo"}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleOpenEdit(resource)}
+                            data-testid={`button-edit-${resource.id}`}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleOpenDelete(resource)}
+                            data-testid={`button-delete-${resource.id}`}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {editingResource ? "Editar Recurso" : "Novo Recurso"}
+            </DialogTitle>
+            <DialogDescription>
+              {editingResource
+                ? "Altere as informações do recurso"
+                : "Adicione uma nova aplicação ou dashboard"}
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit}>
+            <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="name">Nome</Label>
+                  <Input
+                    id="name"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="Nome do recurso"
+                    data-testid="input-resource-name"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="type">Tipo</Label>
+                  <Select
+                    value={formData.type}
+                    onValueChange={(v) => setFormData({ ...formData, type: v as ResourceType })}
+                  >
+                    <SelectTrigger data-testid="select-type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="APP">Aplicação</SelectItem>
+                      <SelectItem value="DASHBOARD">Dashboard</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="sector">Setor</Label>
+                  <Select
+                    value={formData.sectorId}
+                    onValueChange={(v) => setFormData({ ...formData, sectorId: v })}
+                  >
+                    <SelectTrigger data-testid="select-sector">
+                      <SelectValue placeholder="Selecione" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sectors.map((sector) => (
+                        <SelectItem key={sector.id} value={sector.id}>
+                          {sector.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="embedMode">Modo de Exibição</Label>
+                  <Select
+                    value={formData.embedMode}
+                    onValueChange={(v) => setFormData({ ...formData, embedMode: v as EmbedMode })}
+                  >
+                    <SelectTrigger data-testid="select-embed-mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="LINK">Link Externo</SelectItem>
+                      <SelectItem value="IFRAME">Iframe</SelectItem>
+                      <SelectItem value="POWERBI">Power BI</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="url">URL</Label>
+                <Input
+                  id="url"
+                  value={formData.url}
+                  onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+                  placeholder="https://..."
+                  data-testid="input-resource-url"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="tags">Tags (separadas por vírgula)</Label>
+                  <Input
+                    id="tags"
+                    value={formData.tags}
+                    onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
+                    placeholder="financeiro, relatório"
+                    data-testid="input-resource-tags"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="icon">Ícone (Lucide)</Label>
+                  <Input
+                    id="icon"
+                    value={formData.icon}
+                    onChange={(e) => setFormData({ ...formData, icon: e.target.value })}
+                    placeholder="Layout"
+                    data-testid="input-resource-icon"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="isActive"
+                  checked={formData.isActive}
+                  onCheckedChange={(checked) => setFormData({ ...formData, isActive: checked })}
+                  data-testid="switch-resource-active"
+                />
+                <Label htmlFor="isActive">Recurso ativo</Label>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={handleCloseDialog}>
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                disabled={!formData.name.trim() || createMutation.isPending || updateMutation.isPending}
+                data-testid="button-save-resource"
+              >
+                {editingResource ? "Salvar" : "Criar"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir Recurso</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tem certeza que deseja excluir o recurso "{deletingResource?.name}"?
+              Esta ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deletingResource && deleteMutation.mutate(deletingResource.id)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Excluir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

@@ -7,11 +7,16 @@
 Key features:
 - Microsoft Entra ID OAuth2/OIDC authentication
 - Role-based access control: Admin, Coordenador (Coordinator), Usuario (User)
+- Multi-sector user assignment (users can belong to multiple sectors with the same role)
 - Sector-based resource visibility with allow/deny overrides per user
+- Resource open behavior control (HUB_ONLY, NEW_TAB_ONLY, BOTH)
 - Internal apps served via iframe or gateway proxy
 - Power BI dashboard embedding support
 - Global search, favorites, recent access tracking
+- Employee directory with sector filtering and search
+- Profile page with WhatsApp and photo updates
 - Resource health monitoring
+- Admin dashboard with activity logs and summary metrics
 - Audit logging for security compliance
 - Light/dark theme support
 

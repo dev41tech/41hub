@@ -10,6 +10,7 @@ export const embedModeEnum = pgEnum("embed_mode", ["LINK", "IFRAME", "POWERBI"])
 export const openBehaviorEnum = pgEnum("open_behavior", ["HUB_ONLY", "NEW_TAB_ONLY", "BOTH"]);
 export const overrideEffectEnum = pgEnum("override_effect", ["ALLOW", "DENY"]);
 export const healthStatusEnum = pgEnum("health_status", ["UP", "DEGRADED", "DOWN"]);
+export const authProviderEnum = pgEnum("auth_provider", ["entra", "local"]);
 
 // Users table
 export const users = pgTable("users", {
@@ -18,10 +19,21 @@ export const users = pgTable("users", {
   email: varchar("email", { length: 255 }).notNull().unique(),
   name: varchar("name", { length: 255 }).notNull(),
   isActive: boolean("is_active").notNull().default(true),
+  authProvider: authProviderEnum("auth_provider").notNull().default("entra"),
+  passwordHash: varchar("password_hash", { length: 255 }),
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
+  passwordUpdatedAt: timestamp("password_updated_at"),
   themePref: varchar("theme_pref", { length: 10 }).default("light"),
   whatsapp: varchar("whatsapp", { length: 20 }),
   photoUrl: varchar("photo_url", { length: 500 }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Admin settings table (for default password, etc.)
+export const adminSettings = pgTable("admin_settings", {
+  key: varchar("key", { length: 100 }).primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 // Sectors table
@@ -145,6 +157,10 @@ export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
   createdAt: true,
 });
 
+export const insertAdminSettingSchema = createInsertSchema(adminSettings).omit({
+  updatedAt: true,
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -172,6 +188,9 @@ export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 
 export type HealthCheck = typeof healthChecks.$inferSelect;
+
+export type AdminSetting = typeof adminSettings.$inferSelect;
+export type InsertAdminSetting = z.infer<typeof insertAdminSettingSchema>;
 
 // Extended types for frontend
 export type ResourceWithHealth = Resource & {

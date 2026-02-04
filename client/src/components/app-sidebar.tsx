@@ -8,6 +8,7 @@ import {
   LogOut,
   User,
 } from "lucide-react";
+import { ThemeLogo } from "@/components/theme-logo";
 import {
   Sidebar,
   SidebarContent,
@@ -60,15 +61,11 @@ export function AppSidebar() {
   return (
     <Sidebar>
       <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
-        <div className="flex items-center gap-3">
-          <img 
-            src="/41tech-logo.png" 
-            alt="41 Tech" 
-            className="h-8 w-auto" 
-          />
-          <div className="flex flex-col">
-            <span className="font-semibold text-sidebar-foreground">41 Hub</span>
-            <span className="text-xs text-muted-foreground">Portal Corporativo</span>
+        <div className="flex items-center gap-3 min-w-0">
+          <ThemeLogo className="h-8 w-auto shrink-0" />
+          <div className="flex flex-col min-w-0">
+            <span className="font-semibold text-sidebar-foreground truncate leading-tight">41 Hub</span>
+            <span className="text-xs text-muted-foreground truncate leading-tight">Portal Corporativo</span>
           </div>
         </div>
       </SidebarHeader>

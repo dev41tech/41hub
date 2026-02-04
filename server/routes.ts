@@ -2,8 +2,41 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import session from "express-session";
 import { z } from "zod";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
 import { storage } from "./storage";
 import type { UserWithRoles } from "@shared/schema";
+
+// Configure multer for photo uploads
+const uploadDir = path.join(process.cwd(), "uploads");
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const photoStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const filename = `${req.user?.id || "unknown"}-${Date.now()}${ext}`;
+    cb(null, filename);
+  },
+});
+
+const upload = multer({
+  storage: photoStorage,
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ["image/jpeg", "image/png"];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only JPEG and PNG images are allowed"));
+    }
+  },
+});
 
 // Validation schemas
 const createSectorSchema = z.object({
@@ -198,26 +231,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ==================== USER ROUTES ====================
 
-  // Update current user preferences (theme)
+  // Update current user preferences (theme, whatsapp)
   app.patch("/api/users/me", requireAuth, async (req, res) => {
     try {
-      const themePrefSchema = z.object({
-        themePref: z.enum(["light", "dark"]),
+      const updateMeSchema = z.object({
+        themePref: z.enum(["light", "dark"]).optional(),
+        whatsapp: z.string().min(8).max(20).nullable().optional(),
       });
 
-      const parsed = themePrefSchema.safeParse(req.body);
+      const parsed = updateMeSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid data", details: parsed.error.errors });
       }
 
-      const user = await storage.updateUser(req.user!.id, { themePref: parsed.data.themePref });
+      const updates: Record<string, any> = {};
+      if (parsed.data.themePref !== undefined) {
+        updates.themePref = parsed.data.themePref;
+      }
+      if (parsed.data.whatsapp !== undefined) {
+        updates.whatsapp = parsed.data.whatsapp;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: "No valid fields to update" });
+      }
+
+      await storage.updateUser(req.user!.id, updates);
 
       await storage.createAuditLog({
         actorUserId: req.user!.id,
-        action: "user_update_theme",
+        action: "user_update_profile",
         targetType: "user",
         targetId: req.user!.id,
-        metadata: { themePref: parsed.data.themePref },
+        metadata: updates,
         ip: req.ip || req.socket.remoteAddress,
       });
 
@@ -227,6 +273,61 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       console.error("Error updating user preferences:", error);
       res.status(500).json({ error: "Failed to update preferences" });
     }
+  });
+
+  // Upload user photo
+  app.post("/api/users/me/photo", requireAuth, upload.single("photo"), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No photo uploaded" });
+      }
+
+      const photoUrl = `/api/uploads/${req.file.filename}`;
+      await storage.updateUser(req.user!.id, { photoUrl });
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "user_upload_photo",
+        targetType: "user",
+        targetId: req.user!.id,
+        metadata: { photoUrl },
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      const userWithRoles = await storage.getUserWithRoles(req.user!.id);
+      res.json({ photoUrl, user: userWithRoles });
+    } catch (error) {
+      console.error("Error uploading photo:", error);
+      res.status(500).json({ error: "Failed to upload photo" });
+    }
+  });
+
+  // Get team members (same sector)
+  app.get("/api/users/team", requireAuth, async (req, res) => {
+    try {
+      const team = await storage.getTeamMembers(req.user!.id);
+      res.json(team);
+    } catch (error) {
+      console.error("Error fetching team:", error);
+      res.status(500).json({ error: "Failed to fetch team" });
+    }
+  });
+
+  // Serve uploaded files (authenticated)
+  app.get("/api/uploads/:filename", requireAuth, (req, res) => {
+    const filename = req.params.filename;
+    const filePath = path.join(uploadDir, filename);
+
+    // Security: prevent directory traversal
+    if (filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
+      return res.status(400).json({ error: "Invalid filename" });
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    res.sendFile(filePath);
   });
 
   // ==================== RESOURCE ROUTES ====================

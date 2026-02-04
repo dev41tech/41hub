@@ -94,6 +94,16 @@ export interface IStorage {
 
   // Stats
   getAdminStats(): Promise<{ users: number; sectors: number; resources: number; auditLogs: number }>;
+
+  // Team
+  getTeamMembers(userId: string): Promise<Array<{
+    id: string;
+    name: string;
+    email: string;
+    whatsapp: string | null;
+    photoUrl: string | null;
+    roles: Array<{ sectorId: string; sectorName: string; roleName: "Admin" | "Coordenador" | "Usuario" }>;
+  }>>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -528,6 +538,79 @@ export class DatabaseStorage implements IStorage {
       resources: Number(resourceCount.count),
       auditLogs: Number(logCount.count),
     };
+  }
+
+  // Team
+  async getTeamMembers(userId: string): Promise<Array<{
+    id: string;
+    name: string;
+    email: string;
+    whatsapp: string | null;
+    photoUrl: string | null;
+    roles: Array<{ sectorId: string; sectorName: string; roleName: "Admin" | "Coordenador" | "Usuario" }>;
+  }>> {
+    // Get the user's sectors
+    const userSectorIds = await db
+      .select({ sectorId: userSectorRoles.sectorId })
+      .from(userSectorRoles)
+      .where(eq(userSectorRoles.userId, userId));
+
+    if (userSectorIds.length === 0) {
+      return [];
+    }
+
+    const sectorIds = userSectorIds.map(s => s.sectorId);
+
+    // Get all users in those sectors (excluding the current user)
+    const teammateIds = await db
+      .selectDistinct({ userId: userSectorRoles.userId })
+      .from(userSectorRoles)
+      .where(
+        and(
+          inArray(userSectorRoles.sectorId, sectorIds),
+          sql`${userSectorRoles.userId} != ${userId}`
+        )
+      );
+
+    if (teammateIds.length === 0) {
+      return [];
+    }
+
+    const teammates: Array<{
+      id: string;
+      name: string;
+      email: string;
+      whatsapp: string | null;
+      photoUrl: string | null;
+      roles: Array<{ sectorId: string; sectorName: string; roleName: "Admin" | "Coordenador" | "Usuario" }>;
+    }> = [];
+
+    for (const { userId: tId } of teammateIds) {
+      const [user] = await db.select().from(users).where(eq(users.id, tId));
+      if (!user || !user.isActive) continue;
+
+      const userRoles = await db
+        .select({
+          sectorId: userSectorRoles.sectorId,
+          sectorName: sectors.name,
+          roleName: roles.name,
+        })
+        .from(userSectorRoles)
+        .innerJoin(sectors, eq(userSectorRoles.sectorId, sectors.id))
+        .innerJoin(roles, eq(userSectorRoles.roleId, roles.id))
+        .where(eq(userSectorRoles.userId, tId));
+
+      teammates.push({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        whatsapp: user.whatsapp,
+        photoUrl: user.photoUrl,
+        roles: userRoles as Array<{ sectorId: string; sectorName: string; roleName: "Admin" | "Coordenador" | "Usuario" }>,
+      });
+    }
+
+    return teammates.sort((a, b) => a.name.localeCompare(b.name));
   }
 }
 

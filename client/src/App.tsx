@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { ThemeLogo } from "@/components/theme-logo";
 import { Skeleton } from "@/components/ui/skeleton";
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
@@ -78,11 +79,7 @@ function AppContent() {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background">
         <div className="flex flex-col items-center gap-4">
-          <img 
-            src="/41tech-logo.png" 
-            alt="41 Tech" 
-            className="h-12 w-auto" 
-          />
+          <ThemeLogo className="h-12 w-auto" />
           <div className="flex flex-col items-center gap-2">
             <Skeleton className="h-4 w-32" />
             <Skeleton className="h-3 w-24" />

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, Moon, Sun } from "lucide-react";
 import { Link } from "wouter";
+import { ThemeLogo } from "@/components/theme-logo";
 
 export default function Login() {
   const { login, isLoading } = useAuth();
@@ -23,15 +24,11 @@ export default function Login() {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="flex justify-center mb-4">
-            <img 
-              src="/41tech-logo.png" 
-              alt="41 Tech" 
-              className="h-12 w-auto" 
-            />
+            <ThemeLogo className="h-12 w-auto" />
           </div>
-          <CardTitle className="text-2xl">41 Hub</CardTitle>
+          <CardTitle className="text-2xl">41 Hub — Portal Corporativo</CardTitle>
           <CardDescription>
-            Portal corporativo da 41 Tech. Faça login com sua conta Microsoft para continuar.
+            Faça login com sua conta Microsoft para continuar.
           </CardDescription>
         </CardHeader>
         <CardContent>

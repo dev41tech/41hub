@@ -18,6 +18,8 @@ export const users = pgTable("users", {
   name: varchar("name", { length: 255 }).notNull(),
   isActive: boolean("is_active").notNull().default(true),
   themePref: varchar("theme_pref", { length: 10 }).default("light"),
+  whatsapp: varchar("whatsapp", { length: 20 }),
+  photoUrl: varchar("photo_url", { length: 500 }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -183,4 +185,17 @@ export type UserWithRoles = User & {
     roleName: "Admin" | "Coordenador" | "Usuario";
   }>;
   isAdmin: boolean;
+};
+
+export type TeamMember = {
+  id: string;
+  name: string;
+  email: string;
+  whatsapp: string | null;
+  photoUrl: string | null;
+  roles: Array<{
+    sectorId: string;
+    sectorName: string;
+    roleName: "Admin" | "Coordenador" | "Usuario";
+  }>;
 };

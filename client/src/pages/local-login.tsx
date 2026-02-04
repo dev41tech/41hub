@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
+import { ThemeLogo } from "@/components/theme-logo";
 
 export default function LocalLogin() {
   const [, setLocation] = useLocation();
@@ -53,11 +54,7 @@ export default function LocalLogin() {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="flex justify-center mb-4">
-            <img 
-              src="/41tech-logo.png" 
-              alt="41 Tech" 
-              className="h-12 w-auto" 
-            />
+            <ThemeLogo className="h-12 w-auto" />
           </div>
           <CardTitle className="text-2xl">Login Local</CardTitle>
           <CardDescription>

@@ -1,26 +1,15 @@
 import { useAuth } from "@/lib/auth-context";
-import { useTheme } from "@/lib/theme-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, Moon, Sun } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { ThemeLogo } from "@/components/theme-logo";
 
 export default function Login() {
   const { login, isLoading } = useAuth();
-  const { theme, toggleTheme } = useTheme();
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4 relative">
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={toggleTheme}
-        className="absolute top-4 right-4"
-        data-testid="button-theme-toggle"
-      >
-        {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-      </Button>
+    <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="flex justify-center mb-4">

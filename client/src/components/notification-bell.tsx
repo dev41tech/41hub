@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Bell, Check, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -7,9 +7,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { playNotify, primeAudio } from "@/lib/sound";
 import type { Notification } from "@shared/schema";
-
-const BEEP_BASE64 = "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YUoGAACAgICAgICAgICAgICAgICAgICAgICAgICAf3hxam1uc3R4e36AgICAgICAgICAgICBgoOEhYWGh4eHh4aGhYSDgoGAgICAgICAgH+Af4CAgICAgICAgICAgICAf39+fn19fX19fn5/f4CAgICAgICAgICAgIGBgoKCgoKCgoGBgICAgICAgICAgIB/f35+fX19fX5+f3+AgICAgICAgICAgICBgYKCgoKCgoKBgYCAgICAgICAgICAf39+fn19fX19fn5/f4CAgICAgICAgICAgIGBgoKCgoKCgoGBgICAgICAgICAgIB/f35+fX19fX5+f3+AgICAgICAgICAgICBgYKCgoKCgoKBgYCAgICAgICAgICAgH9/fn59fX19fX5+f3+AgICAgICAgICAgICBgYKCgoKCgoKBgYCAgICAgICAgICAf39+fn19fX19fn5/f4CAgICAgICAgICAgA==";
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
@@ -17,21 +16,15 @@ export function NotificationBell() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const lastSeenIdRef = useRef<string | null>(null);
-  const hasInteractedRef = useRef(false);
   const initializedRef = useRef(false);
 
   useEffect(() => {
-    function handleInteraction() {
-      hasInteractedRef.current = true;
-      window.removeEventListener("click", handleInteraction);
-      window.removeEventListener("keydown", handleInteraction);
+    function handlePrime() {
+      primeAudio();
+      document.removeEventListener("pointerdown", handlePrime);
     }
-    window.addEventListener("click", handleInteraction);
-    window.addEventListener("keydown", handleInteraction);
-    return () => {
-      window.removeEventListener("click", handleInteraction);
-      window.removeEventListener("keydown", handleInteraction);
-    };
+    document.addEventListener("pointerdown", handlePrime, { once: true });
+    return () => document.removeEventListener("pointerdown", handlePrime);
   }, []);
 
   const { data: countData } = useQuery<{ count: number }>({
@@ -48,15 +41,6 @@ export function NotificationBell() {
     },
     refetchInterval: 15000,
   });
-
-  const playBeep = useCallback(() => {
-    if (!hasInteractedRef.current) return;
-    try {
-      const audio = new Audio(BEEP_BASE64);
-      audio.volume = 0.3;
-      audio.play().catch(() => {});
-    } catch {}
-  }, []);
 
   useEffect(() => {
     if (recentNotifications.length === 0) return;
@@ -84,12 +68,12 @@ export function NotificationBell() {
       }
 
       if (newNotifs.length > 0) {
-        playBeep();
+        playNotify();
       }
 
       lastSeenIdRef.current = maxId;
     }
-  }, [recentNotifications, toast, playBeep]);
+  }, [recentNotifications, toast]);
 
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
     queryKey: ["/api/notifications"],

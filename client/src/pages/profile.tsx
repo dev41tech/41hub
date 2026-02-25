@@ -211,7 +211,7 @@ export default function Profile() {
   const userSectorIds = user.roles?.map(r => r.sectorId) || [];
 
   return (
-    <div className="container max-w-4xl py-8 px-4 space-y-6">
+    <div className="max-w-4xl w-full mx-auto py-8 px-4 space-y-6">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -498,6 +498,11 @@ export default function Profile() {
                 <Zap className="h-3 w-3 mr-1" />
                 {typingBest.wpm >= 80 ? "Avançado" : typingBest.wpm >= 50 ? "Intermediário" : "Iniciante"}
               </Badge>
+              {(typingBest as any).difficulty && (
+                <Badge variant="outline" data-testid="badge-typing-difficulty">
+                  {(typingBest as any).difficulty === 1 ? "Fácil" : (typingBest as any).difficulty === 2 ? "Média" : "Difícil"}
+                </Badge>
+              )}
               <Button variant="outline" size="sm" onClick={() => setLocation("/typing")} data-testid="button-go-typing">
                 <Keyboard className="h-4 w-4 mr-2" />
                 Fazer Teste

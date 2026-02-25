@@ -98,7 +98,7 @@ export default function TypingLeaderboard() {
   if (!user) return null;
 
   return (
-    <div className="container max-w-3xl py-8 px-4 space-y-6">
+    <div className="max-w-4xl w-full mx-auto py-8 px-4 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => setLocation("/typing")} data-testid="button-back-typing">
@@ -169,7 +169,7 @@ export default function TypingLeaderboard() {
             {tab === "global" ? "Ranking Global" : "Ranking por Setor"}
           </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="overflow-x-auto">
           {isLoading ? (
             <div className="space-y-3">
               {[1, 2, 3, 4, 5].map((i) => (
@@ -217,7 +217,7 @@ export default function TypingLeaderboard() {
                       <p className="text-xs text-muted-foreground truncate">{entry.sectorName}</p>
                     )}
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 shrink-0">
                     <div className="text-right">
                       <p className="font-bold text-sm flex items-center gap-1">
                         <Zap className="h-3 w-3 text-primary" />

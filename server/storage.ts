@@ -846,10 +846,11 @@ export class DatabaseStorage implements IStorage {
       .where(eq(ticketCategories.isActive, true))
       .orderBy(ticketCategories.branch, ticketCategories.name);
 
-    const roots = all.filter(c => !c.parentId);
-    return roots.map(root => ({
+    const activeRoots = all.filter(c => !c.parentId);
+    const activeRootIds = new Set(activeRoots.map(r => r.id));
+    return activeRoots.map(root => ({
       ...root,
-      children: all.filter(c => c.parentId === root.id),
+      children: all.filter(c => c.parentId === root.id && activeRootIds.has(c.parentId)),
     }));
   }
 

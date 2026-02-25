@@ -13,7 +13,6 @@ export const healthStatusEnum = pgEnum("health_status", ["UP", "DEGRADED", "DOWN
 export const authProviderEnum = pgEnum("auth_provider", ["entra", "local"]);
 export const ticketStatusEnum = pgEnum("ticket_status", ["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO", "RESOLVIDO", "CANCELADO"]);
 export const ticketPriorityEnum = pgEnum("ticket_priority", ["BAIXA", "MEDIA", "ALTA", "URGENTE"]);
-export const ticketCategoryBranchEnum = pgEnum("ticket_category_branch", ["INFRA", "DEV", "SUPORTE"]);
 export const ticketEventTypeEnum = pgEnum("ticket_event_type", ["ticket_created", "status_changed", "assignees_changed", "comment_added", "attachment_added", "resolved", "reopened", "priority_changed", "category_changed"]);
 
 // Users table
@@ -130,7 +129,7 @@ export const healthChecks = pgTable("health_checks", {
 export const ticketCategories = pgTable("ticket_categories", {
   id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
   name: varchar("name", { length: 255 }).notNull(),
-  branch: ticketCategoryBranchEnum("branch").notNull(),
+  branch: varchar("branch", { length: 120 }).notNull(),
   parentId: varchar("parent_id", { length: 36 }).references((): any => ticketCategories.id, { onDelete: "set null" }),
   isActive: boolean("is_active").notNull().default(true),
   descriptionTemplate: text("description_template"),

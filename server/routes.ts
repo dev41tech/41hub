@@ -1420,12 +1420,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const schema = z.object({
         name: z.string().min(1).max(255),
-        branch: z.enum(["INFRA", "DEV", "SUPORTE"]),
+        branch: z.string().min(1).max(120),
         parentId: z.string().nullable().optional(),
+        descriptionTemplate: z.string().nullable().optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+      }
+
+      if (parsed.data.parentId) {
+        const allCats = await storage.listAllTicketCategories();
+        const parent = allCats.find(c => c.id === parsed.data.parentId);
+        if (!parent || parent.parentId !== null) {
+          return res.status(400).json({ error: "Categoria pai deve ser uma branch (raiz)" });
+        }
       }
 
       const cat = await storage.createTicketCategory({
@@ -1452,7 +1461,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const schema = z.object({
         name: z.string().min(1).max(255).optional(),
-        branch: z.enum(["INFRA", "DEV", "SUPORTE"]).optional(),
+        branch: z.string().min(1).max(120).optional(),
         parentId: z.string().nullable().optional(),
         isActive: z.boolean().optional(),
         descriptionTemplate: z.string().nullable().optional(),

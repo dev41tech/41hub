@@ -37,6 +37,10 @@ export default function TicketsNew() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
 
+  const isAdmin = user?.isAdmin;
+  const isCoordinator = !isAdmin && user?.roles?.some(r => r.roleName === "Coordenador");
+  const isUser = !isAdmin && !isCoordinator;
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [requesterSectorId, setRequesterSectorId] = useState("");
@@ -45,24 +49,31 @@ export default function TicketsNew() {
   const [showTemplateConfirm, setShowTemplateConfirm] = useState(false);
   const pendingTemplate = useRef("");
 
-  const { data: sectors = [] } = useQuery<Sector[]>({
+  const { data: adminSectors = [] } = useQuery<Sector[]>({
     queryKey: ["/api/admin/sectors"],
-    queryFn: async () => {
-      const res = await fetch("/api/admin/sectors", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    enabled: !!isAdmin,
   });
 
   const { data: categories = [] } = useQuery<TicketCategoryTree[]>({
     queryKey: ["/api/tickets/categories"],
   });
 
-  const availableSectors = user?.isAdmin
-    ? sectors
-    : sectors.filter(s =>
-        user?.roles?.some(r => r.sectorId === s.id && (r.roleName === "Coordenador"))
-      );
+  const availableSectors: Array<{ id: string; name: string }> = (() => {
+    if (isAdmin) return adminSectors;
+    if (!user?.roles) return [];
+    const sectorMap = new Map<string, string>();
+    for (const r of user.roles) {
+      if (r.roleName === "Coordenador") {
+        sectorMap.set(r.sectorId, r.sectorName);
+      }
+    }
+    if (sectorMap.size === 0) {
+      for (const r of user.roles) {
+        sectorMap.set(r.sectorId, r.sectorName);
+      }
+    }
+    return Array.from(sectorMap, ([id, name]) => ({ id, name }));
+  })();
 
   useEffect(() => {
     if (availableSectors.length === 1 && !requesterSectorId) {
@@ -126,6 +137,14 @@ export default function TicketsNew() {
   };
 
   const effectiveSectorId = requesterSectorId || (availableSectors.length === 1 ? availableSectors[0].id : "");
+
+  useEffect(() => {
+    if (isUser) {
+      navigate("/tickets");
+    }
+  }, [isUser, navigate]);
+
+  if (isUser) return null;
 
   return (
     <div className="flex flex-col gap-6 p-6">

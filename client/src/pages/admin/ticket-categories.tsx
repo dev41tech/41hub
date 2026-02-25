@@ -2,12 +2,13 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -30,35 +31,53 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ArrowLeft, Plus, Pencil, Trash2, Loader2, FolderTree } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Trash2, RotateCcw, Loader2, FolderTree } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { TicketCategory } from "@shared/schema";
+
+type DialogMode = "branch" | "subcategory" | "edit";
 
 export default function AdminTicketCategories() {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogMode, setDialogMode] = useState<DialogMode>("branch");
   const [editing, setEditing] = useState<TicketCategory | null>(null);
   const [name, setName] = useState("");
-  const [branch, setBranch] = useState<string>("INFRA");
+  const [branch, setBranch] = useState("");
   const [parentId, setParentId] = useState<string>("none");
   const [descriptionTemplate, setDescriptionTemplate] = useState("");
+  const [showInactive, setShowInactive] = useState(false);
 
   const { data: categories = [], isLoading } = useQuery<TicketCategory[]>({
     queryKey: ["/api/admin/tickets/categories"],
   });
 
   const roots = categories.filter(c => !c.parentId);
+  const activeRoots = roots.filter(r => r.isActive);
 
-  const createMutation = useMutation({
+  const saveMutation = useMutation({
     mutationFn: async () => {
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         name,
-        branch,
-        parentId: parentId === "none" ? null : parentId,
         descriptionTemplate: descriptionTemplate || null,
       };
+
       if (editing) {
+        if (editing.parentId) {
+          payload.parentId = parentId === "none" ? null : parentId;
+          const parent = parentId !== "none" ? categories.find(c => c.id === parentId) : null;
+          if (parent) payload.branch = parent.branch;
+        }
         return (await apiRequest("PATCH", `/api/admin/tickets/categories/${editing.id}`, payload)).json();
+      }
+
+      if (dialogMode === "branch") {
+        payload.branch = name;
+        payload.parentId = null;
+      } else {
+        const parent = categories.find(c => c.id === parentId);
+        payload.branch = parent?.branch || name;
+        payload.parentId = parentId === "none" ? null : parentId;
       }
       return (await apiRequest("POST", "/api/admin/tickets/categories", payload)).json();
     },
@@ -74,51 +93,74 @@ export default function AdminTicketCategories() {
     },
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      await apiRequest("DELETE", `/api/admin/tickets/categories/${id}`);
+  const toggleActiveMutation = useMutation({
+    mutationFn: async ({ id, isActive }: { id: string; isActive: boolean }) => {
+      return (await apiRequest("PATCH", `/api/admin/tickets/categories/${id}`, { isActive })).json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tickets/categories"] });
       queryClient.invalidateQueries({ queryKey: ["/api/tickets/categories"] });
-      toast({ title: "Categoria desativada" });
+      toast({ title: "Status atualizado" });
+    },
+    onError: (e: any) => {
+      toast({ title: "Erro", description: e.message, variant: "destructive" });
     },
   });
 
   function resetForm() {
     setEditing(null);
     setName("");
-    setBranch("INFRA");
+    setBranch("");
     setParentId("none");
     setDescriptionTemplate("");
   }
 
-  function openCreate() {
+  function openCreateBranch() {
     resetForm();
+    setDialogMode("branch");
+    setDialogOpen(true);
+  }
+
+  function openCreateSubcategory() {
+    resetForm();
+    setDialogMode("subcategory");
+    if (activeRoots.length === 1) {
+      setParentId(activeRoots[0].id);
+    }
     setDialogOpen(true);
   }
 
   function openEdit(cat: TicketCategory) {
     setEditing(cat);
+    setDialogMode("edit");
     setName(cat.name);
     setBranch(cat.branch);
     setParentId(cat.parentId || "none");
-    setDescriptionTemplate((cat as any).descriptionTemplate || "");
+    setDescriptionTemplate(cat.descriptionTemplate || "");
     setDialogOpen(true);
   }
 
-  const sortedCategories = [...categories].sort((a, b) => {
-    if (!a.parentId && !b.parentId) return a.branch.localeCompare(b.branch) || a.name.localeCompare(b.name);
-    if (!a.parentId) return -1;
-    if (!b.parentId) return 1;
-    const rootA = categories.find(c => c.id === a.parentId);
-    const rootB = categories.find(c => c.id === b.parentId);
-    if (rootA && rootB) {
-      const branchCmp = rootA.branch.localeCompare(rootB.branch);
-      if (branchCmp !== 0) return branchCmp;
-      return rootA.name.localeCompare(rootB.name) || a.name.localeCompare(b.name);
-    }
-    return 0;
+  const filteredCategories = showInactive
+    ? categories
+    : categories.filter(c => c.isActive);
+
+  const sortedCategories = [...filteredCategories].sort((a, b) => {
+    const aIsRoot = !a.parentId;
+    const bIsRoot = !b.parentId;
+
+    if (aIsRoot && bIsRoot) return a.name.localeCompare(b.name);
+
+    const rootA = aIsRoot ? a : categories.find(c => c.id === a.parentId);
+    const rootB = bIsRoot ? b : categories.find(c => c.id === b.parentId);
+
+    const rootNameA = rootA?.name || "";
+    const rootNameB = rootB?.name || "";
+    const rootCmp = rootNameA.localeCompare(rootNameB);
+    if (rootCmp !== 0) return rootCmp;
+
+    if (aIsRoot) return -1;
+    if (bIsRoot) return 1;
+    return a.name.localeCompare(b.name);
   });
 
   return (
@@ -135,25 +177,46 @@ export default function AdminTicketCategories() {
           </div>
           <div>
             <h1 className="text-xl font-semibold">Categorias de Chamados</h1>
-            <p className="text-sm text-muted-foreground">Gerenciar categorias e subcategorias</p>
+            <p className="text-sm text-muted-foreground">Gerenciar branches e subcategorias</p>
           </div>
         </div>
-        <Button onClick={openCreate} data-testid="button-new-category">
-          <Plus className="mr-2 h-4 w-4" />
-          Nova Categoria
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={openCreateBranch} data-testid="button-new-branch">
+            <Plus className="mr-2 h-4 w-4" />
+            Nova Branch
+          </Button>
+          <Button onClick={openCreateSubcategory} data-testid="button-new-subcategory">
+            <Plus className="mr-2 h-4 w-4" />
+            Nova Subcategoria
+          </Button>
+        </div>
       </div>
 
       <Card>
         <CardContent className="pt-6">
+          <div className="flex items-center justify-end gap-2 mb-4">
+            <Label htmlFor="show-inactive" className="text-sm text-muted-foreground">
+              Mostrar inativas
+            </Label>
+            <Switch
+              id="show-inactive"
+              checked={showInactive}
+              onCheckedChange={setShowInactive}
+              data-testid="switch-show-inactive"
+            />
+          </div>
+
           {isLoading ? (
             <div className="text-center py-8 text-muted-foreground">Carregando...</div>
+          ) : sortedCategories.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              Nenhuma categoria encontrada.
+            </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Nome</TableHead>
-                  <TableHead>Branch</TableHead>
                   <TableHead>Tipo</TableHead>
                   <TableHead>Template</TableHead>
                   <TableHead>Status</TableHead>
@@ -161,44 +224,62 @@ export default function AdminTicketCategories() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sortedCategories.map(cat => (
-                  <TableRow key={cat.id} data-testid={`category-${cat.id}`}>
-                    <TableCell className={cat.parentId ? "pl-8" : "font-medium"}>
-                      {cat.parentId ? "└ " : ""}{cat.name}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{cat.branch}</Badge>
-                    </TableCell>
-                    <TableCell>{cat.parentId ? "Subcategoria" : "Raiz"}</TableCell>
-                    <TableCell>
-                      {(cat as any).descriptionTemplate ? (
-                        <Badge variant="secondary" className="text-xs">Sim</Badge>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={cat.isActive ? "default" : "secondary"}>
-                        {cat.isActive ? "Ativa" : "Inativa"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="icon" onClick={() => openEdit(cat)} data-testid={`edit-${cat.id}`}>
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      {cat.isActive && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => deleteMutation.mutate(cat.id)}
-                          data-testid={`delete-${cat.id}`}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
+                {sortedCategories.map(cat => {
+                  const isRoot = !cat.parentId;
+                  return (
+                    <TableRow key={cat.id} className={!cat.isActive ? "opacity-60" : ""} data-testid={`category-${cat.id}`}>
+                      <TableCell className={isRoot ? "font-semibold" : "pl-8"}>
+                        {isRoot ? (
+                          <span className="flex items-center gap-2">
+                            <FolderTree className="h-4 w-4 text-primary" />
+                            {cat.name}
+                          </span>
+                        ) : (
+                          <>└ {cat.name}</>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{isRoot ? "Branch" : "Subcategoria"}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        {cat.descriptionTemplate ? (
+                          <Badge variant="secondary" className="text-xs">Sim</Badge>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={cat.isActive ? "default" : "secondary"}>
+                          {cat.isActive ? "Ativa" : "Inativa"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right space-x-1">
+                        <Button variant="ghost" size="icon" onClick={() => openEdit(cat)} data-testid={`edit-${cat.id}`}>
+                          <Pencil className="h-4 w-4" />
                         </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
+                        {cat.isActive ? (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => toggleActiveMutation.mutate({ id: cat.id, isActive: false })}
+                            data-testid={`deactivate-${cat.id}`}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => toggleActiveMutation.mutate({ id: cat.id, isActive: true })}
+                            data-testid={`reactivate-${cat.id}`}
+                          >
+                            <RotateCcw className="h-4 w-4 text-green-600" />
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}
@@ -208,40 +289,52 @@ export default function AdminTicketCategories() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editing ? "Editar Categoria" : "Nova Categoria"}</DialogTitle>
+            <DialogTitle>
+              {editing
+                ? "Editar Categoria"
+                : dialogMode === "branch"
+                ? "Nova Branch"
+                : "Nova Subcategoria"}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
               <Label>Nome</Label>
               <Input value={name} onChange={(e) => setName(e.target.value)} data-testid="input-category-name" />
             </div>
-            <div className="space-y-2">
-              <Label>Branch</Label>
-              <Select value={branch} onValueChange={setBranch}>
-                <SelectTrigger data-testid="select-branch">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="INFRA">Infra</SelectItem>
-                  <SelectItem value="DEV">Dev</SelectItem>
-                  <SelectItem value="SUPORTE">Suporte</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Categoria Pai (opcional)</Label>
-              <Select value={parentId} onValueChange={setParentId}>
-                <SelectTrigger data-testid="select-parent">
-                  <SelectValue placeholder="Nenhuma (raiz)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Nenhuma (raiz)</SelectItem>
-                  {roots.map(r => (
-                    <SelectItem key={r.id} value={r.id}>{r.name} ({r.branch})</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+
+            {dialogMode === "subcategory" && !editing && (
+              <div className="space-y-2">
+                <Label>Branch (pai)</Label>
+                <Select value={parentId} onValueChange={setParentId}>
+                  <SelectTrigger data-testid="select-parent">
+                    <SelectValue placeholder="Selecione a branch" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {activeRoots.map(r => (
+                      <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {editing && editing.parentId && (
+              <div className="space-y-2">
+                <Label>Branch (pai)</Label>
+                <Select value={parentId} onValueChange={setParentId}>
+                  <SelectTrigger data-testid="select-parent">
+                    <SelectValue placeholder="Selecione a branch" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {roots.map(r => (
+                      <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             <div className="space-y-2">
               <Label>Template de Descrição (opcional)</Label>
               <Textarea
@@ -256,11 +349,11 @@ export default function AdminTicketCategories() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>
             <Button
-              onClick={() => createMutation.mutate()}
-              disabled={!name || createMutation.isPending}
+              onClick={() => saveMutation.mutate()}
+              disabled={!name || saveMutation.isPending || (dialogMode === "subcategory" && !editing && parentId === "none")}
               data-testid="button-save-category"
             >
-              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Salvar"}
+              {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Salvar"}
             </Button>
           </DialogFooter>
         </DialogContent>

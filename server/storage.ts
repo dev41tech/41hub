@@ -259,9 +259,9 @@ export interface IStorage {
   createTypingSession(userId: string, textId: string, nonce: string, expiresAt: Date): Promise<TypingSession>;
   getTypingSession(id: string): Promise<TypingSession | undefined>;
   getTypingSessionByNonce(nonce: string): Promise<TypingSession | undefined>;
-  submitTypingSession(sessionId: string, score: { wpm: number; accuracy: string; durationMs: number; userId: string; sectorId: string | null; monthKey: string }): Promise<TypingScore>;
-  getTypingLeaderboard(opts: { monthKey: string; sectorId?: string; limit?: number }): Promise<Array<{ userId: string; userName: string; userPhoto: string | null; sectorName: string | null; wpm: number; accuracy: string; monthKey: string }>>;
-  getUserBestTypingScore(userId: string): Promise<TypingScore | undefined>;
+  submitTypingSession(sessionId: string, score: { wpm: number; accuracy: string; durationMs: number; userId: string; sectorId: string | null; monthKey: string; difficulty: number }): Promise<TypingScore>;
+  getTypingLeaderboard(opts: { monthKey: string; sectorId?: string; difficulty?: number; limit?: number }): Promise<Array<{ userId: string; userName: string; userPhoto: string | null; sectorName: string | null; wpm: number; accuracy: string; monthKey: string }>>;
+  getUserBestTypingScore(userId: string, difficulty?: number): Promise<TypingScore | undefined>;
 
   // TI Dashboard
   getTiDashboard(range: '7d' | '30d'): Promise<{
@@ -1862,7 +1862,7 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
-  async submitTypingSession(sessionId: string, score: { wpm: number; accuracy: string; durationMs: number; userId: string; sectorId: string | null; monthKey: string }): Promise<TypingScore> {
+  async submitTypingSession(sessionId: string, score: { wpm: number; accuracy: string; durationMs: number; userId: string; sectorId: string | null; monthKey: string; difficulty: number }): Promise<TypingScore> {
     await db.update(typingSessions).set({ submittedAt: new Date() }).where(eq(typingSessions.id, sessionId));
     const [row] = await db.insert(typingScores).values({
       userId: score.userId,
@@ -1871,14 +1871,18 @@ export class DatabaseStorage implements IStorage {
       wpm: score.wpm,
       accuracy: score.accuracy,
       durationMs: score.durationMs,
+      difficulty: score.difficulty,
     }).returning();
     return row;
   }
 
-  async getTypingLeaderboard(opts: { monthKey: string; sectorId?: string; limit?: number }): Promise<Array<{ userId: string; userName: string; userPhoto: string | null; sectorName: string | null; wpm: number; accuracy: string; monthKey: string }>> {
+  async getTypingLeaderboard(opts: { monthKey: string; sectorId?: string; difficulty?: number; limit?: number }): Promise<Array<{ userId: string; userName: string; userPhoto: string | null; sectorName: string | null; wpm: number; accuracy: string; monthKey: string }>> {
     const conditions: any[] = [eq(typingScores.monthKey, opts.monthKey)];
     if (opts.sectorId) {
       conditions.push(eq(typingScores.sectorId, opts.sectorId));
+    }
+    if (opts.difficulty) {
+      conditions.push(eq(typingScores.difficulty, opts.difficulty));
     }
 
     const rows = await db
@@ -1920,9 +1924,13 @@ export class DatabaseStorage implements IStorage {
       }));
   }
 
-  async getUserBestTypingScore(userId: string): Promise<TypingScore | undefined> {
+  async getUserBestTypingScore(userId: string, difficulty?: number): Promise<TypingScore | undefined> {
+    const conditions: any[] = [eq(typingScores.userId, userId)];
+    if (difficulty) {
+      conditions.push(eq(typingScores.difficulty, difficulty));
+    }
     const [row] = await db.select().from(typingScores)
-      .where(eq(typingScores.userId, userId))
+      .where(and(...conditions))
       .orderBy(desc(typingScores.wpm))
       .limit(1);
     return row;

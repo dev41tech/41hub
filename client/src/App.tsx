@@ -38,6 +38,7 @@ import AdminNotifications from "@/pages/admin/notifications";
 import AdminKb from "@/pages/admin/kb";
 import AdminTiDashboard from "@/pages/admin/ti-dashboard";
 import AdminTyping from "@/pages/admin/typing";
+import AdminReports from "@/pages/admin/reports";
 import TicketsIndex from "@/pages/tickets/index";
 import TicketsNew from "@/pages/tickets/new";
 import TicketsDetail from "@/pages/tickets/detail";
@@ -69,6 +70,7 @@ function Router() {
       <Route path="/admin/kb" component={AdminKb} />
       <Route path="/admin/ti" component={AdminTiDashboard} />
       <Route path="/admin/typing" component={AdminTyping} />
+      <Route path="/admin/reports" component={AdminReports} />
       <Route path="/admin/tickets/categories" component={AdminTicketCategories} />
       <Route path="/admin/tickets/sla" component={AdminTicketSlaPolicies} />
       <Route component={NotFound} />

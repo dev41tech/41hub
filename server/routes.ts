@@ -1870,15 +1870,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/typing/session", requireAuth, async (req, res) => {
     try {
+      const difficulty = Math.max(1, Math.min(3, parseInt(req.body?.difficulty) || 1));
       const activeTexts = await storage.listTypingTexts(true);
       if (activeTexts.length === 0) {
         return res.status(400).json({ error: "Nenhum texto disponível para digitação" });
       }
-      const text = activeTexts[Math.floor(Math.random() * activeTexts.length)];
+      const diffTexts = activeTexts.filter((t: any) => t.difficulty === difficulty);
+      const pool = diffTexts.length > 0 ? diffTexts : activeTexts;
+      const text = pool[Math.floor(Math.random() * pool.length)];
       const nonce = crypto.randomBytes(16).toString("hex");
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
       const session = await storage.createTypingSession(req.user!.id, text.id, nonce, expiresAt);
-      res.json({ session, text });
+      res.json({ session, text, difficulty });
     } catch (error) {
       console.error("Error creating typing session:", error);
       res.status(500).json({ error: "Failed to create typing session" });
@@ -1890,10 +1893,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const schema = z.object({
         sessionId: z.string().min(1),
         nonce: z.string().min(1),
-        wpm: z.number().int().min(1).max(300),
+        wpm: z.number().min(1).max(300),
         accuracy: z.number().min(0).max(100),
-        durationMs: z.number().int().min(1000).max(600000),
+        durationMs: z.number().min(1000).max(90000),
         typed: z.string().min(1),
+        difficulty: z.number().int().min(1).max(3).optional(),
       });
 
       const parsed = schema.safeParse(req.body);
@@ -1911,22 +1915,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const text = session.textId ? await storage.getTypingText(session.textId) : null;
       if (!text) return res.status(400).json({ error: "Texto original não encontrado" });
 
-      const minExpectedMs = (text.content.length / 20) * 60 * 1000 * 0.1;
-      if (parsed.data.durationMs < minExpectedMs) {
-        return res.status(400).json({ error: "Duração suspeita (anti-cheat)" });
+      let finalDurationMs = parsed.data.durationMs;
+      const durationServerMs = Date.now() - new Date(session.startedAt).getTime();
+      if (Math.abs(finalDurationMs - durationServerMs) > 15000) {
+        finalDurationMs = durationServerMs;
       }
+
+      if (finalDurationMs < 10000) {
+        return res.status(400).json({ error: "Duração muito curta (anti-cheat)" });
+      }
+      if (finalDurationMs > 90000) {
+        finalDurationMs = 90000;
+      }
+
+      const durationMin = finalDurationMs / 60000;
+      const words = parsed.data.typed.trim().split(/\s+/).length;
+      const recalcWpm = Math.round(words / durationMin);
+      const finalWpm = Math.min(recalcWpm, 300);
 
       const userSectorId = req.user!.roles?.[0]?.sectorId || null;
       const now = new Date();
       const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+      const difficulty = parsed.data.difficulty || 1;
 
       const score = await storage.submitTypingSession(parsed.data.sessionId, {
-        wpm: parsed.data.wpm,
+        wpm: finalWpm,
         accuracy: parsed.data.accuracy.toFixed(2),
-        durationMs: parsed.data.durationMs,
+        durationMs: finalDurationMs,
         userId: req.user!.id,
         sectorId: userSectorId,
         monthKey,
+        difficulty,
       });
 
       res.json(score);
@@ -1941,7 +1960,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const now = new Date();
       const monthKey = (req.query.month as string) || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
       const sectorId = req.query.sectorId as string | undefined;
-      const leaderboard = await storage.getTypingLeaderboard({ monthKey, sectorId });
+      const difficulty = req.query.difficulty ? parseInt(req.query.difficulty as string) : undefined;
+      const leaderboard = await storage.getTypingLeaderboard({ monthKey, sectorId, difficulty, limit: 20 });
       res.json(leaderboard);
     } catch (error) {
       console.error("Error fetching leaderboard:", error);
@@ -1951,7 +1971,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/typing/me", requireAuth, async (req, res) => {
     try {
-      const best = await storage.getUserBestTypingScore(req.user!.id);
+      const difficulty = req.query.difficulty ? parseInt(req.query.difficulty as string) : undefined;
+      const best = await storage.getUserBestTypingScore(req.user!.id, difficulty);
       res.json(best || null);
     } catch (error) {
       console.error("Error fetching user typing score:", error);
@@ -2040,6 +2061,161 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (error) {
       console.error("Error deleting typing text:", error);
       res.status(500).json({ error: "Failed to delete typing text" });
+    }
+  });
+
+  // ============ Admin Reports Routes ============
+
+  function toCsv(headers: string[], rows: Record<string, any>[]): string {
+    const escape = (v: any) => {
+      if (v == null) return "";
+      const s = String(v);
+      if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    };
+    const lines = [headers.join(",")];
+    for (const row of rows) {
+      lines.push(headers.map((h) => escape(row[h])).join(","));
+    }
+    return lines.join("\n");
+  }
+
+  app.get("/api/admin/reports/tickets", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const format = (req.query.format as string) || "json";
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+
+      let whereClause = "";
+      const params: any[] = [];
+      if (from) {
+        params.push(from);
+        whereClause += ` AND t.created_at >= $${params.length}::date`;
+      }
+      if (to) {
+        params.push(to);
+        whereClause += ` AND t.created_at <= ($${params.length}::date + interval '1 day')`;
+      }
+
+      const result = await pool.query(
+        `SELECT t.id as "ticketId", t.created_at as "createdAt", t.closed_at as "closedAt",
+                t.status, t.priority, t.branch,
+                tc.name as "category",
+                u.name as "requesterName",
+                s.name as "requesterSector"
+         FROM tickets t
+         LEFT JOIN ticket_categories tc ON t.category_id = tc.id
+         LEFT JOIN users u ON t.requester_id = u.id
+         LEFT JOIN sectors s ON t.sector_id = s.id
+         WHERE 1=1 ${whereClause}
+         ORDER BY t.created_at DESC`,
+        params
+      );
+
+      const rows = result.rows.map((r: any) => ({
+        ticketId: r.ticketId,
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : "",
+        closedAt: r.closedAt ? new Date(r.closedAt).toISOString() : "",
+        status: r.status,
+        priority: r.priority,
+        branch: r.branch || "",
+        category: r.category || "",
+        requesterName: r.requesterName || "",
+        requesterSector: r.requesterSector || "",
+      }));
+
+      if (format === "csv") {
+        const headers = ["ticketId", "createdAt", "closedAt", "status", "priority", "branch", "category", "requesterName", "requesterSector"];
+        const csv = toCsv(headers, rows);
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", 'attachment; filename="tickets_report.csv"');
+        return res.send(csv);
+      }
+      res.json(rows);
+    } catch (error) {
+      console.error("Error generating tickets report:", error);
+      res.status(500).json({ error: "Failed to generate report" });
+    }
+  });
+
+  app.get("/api/admin/reports/resources", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const format = (req.query.format as string) || "json";
+      const result = await pool.query(
+        `SELECT id as "resourceId", name, type, url, updated_at as "updatedAt"
+         FROM resources ORDER BY name`
+      );
+      const rows = result.rows.map((r: any) => ({
+        resourceId: r.resourceId,
+        name: r.name,
+        type: r.type,
+        url: r.url || "",
+        updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : "",
+      }));
+
+      if (format === "csv") {
+        const headers = ["resourceId", "name", "type", "url", "updatedAt"];
+        const csv = toCsv(headers, rows);
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", 'attachment; filename="resources_report.csv"');
+        return res.send(csv);
+      }
+      res.json(rows);
+    } catch (error) {
+      console.error("Error generating resources report:", error);
+      res.status(500).json({ error: "Failed to generate report" });
+    }
+  });
+
+  app.get("/api/admin/reports/notifications", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const format = (req.query.format as string) || "json";
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+
+      let whereClause = "";
+      const params: any[] = [];
+      if (from) {
+        params.push(from);
+        whereClause += ` AND n.created_at >= $${params.length}::date`;
+      }
+      if (to) {
+        params.push(to);
+        whereClause += ` AND n.created_at <= ($${params.length}::date + interval '1 day')`;
+      }
+
+      const result = await pool.query(
+        `SELECT n.id, n.type, u.name as "recipientName", n.is_read as "isRead",
+                n.created_at as "createdAt", n.link_url as "linkUrl"
+         FROM notifications n
+         LEFT JOIN users u ON n.user_id = u.id
+         WHERE 1=1 ${whereClause}
+         ORDER BY n.created_at DESC`,
+        params
+      );
+
+      const rows = result.rows.map((r: any) => ({
+        id: r.id,
+        type: r.type,
+        recipientName: r.recipientName || "",
+        isRead: r.isRead ? "Sim" : "Não",
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : "",
+        linkUrl: r.linkUrl || "",
+      }));
+
+      if (format === "csv") {
+        const headers = ["id", "type", "recipientName", "isRead", "createdAt", "linkUrl"];
+        const csv = toCsv(headers, rows);
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", 'attachment; filename="notifications_report.csv"');
+        return res.send(csv);
+      }
+      res.json(rows);
+    } catch (error) {
+      console.error("Error generating notifications report:", error);
+      res.status(500).json({ error: "Failed to generate report" });
     }
   });
 

@@ -29,6 +29,9 @@ Key features:
 - IT Ops Dashboard (Painel TI) with SLA monitoring, queue view, WIP by assignee, throughput metrics
 - Knowledge Base (KB) with articles linked to ticket categories, article suggestions on ticket creation
 - Typing Test with monthly leaderboard (sector + global), anti-cheat validation, profile badge
+- Typing Test: difficulty selector (Fácil/Média/Difícil), 60-second fixed timer, difficulty-based leaderboard
+- Real-time notification toasts with sound (polling-based, 15s interval)
+- Admin Reports page: export Tickets, Resources, Notifications as CSV or JSON
 
 ## User Preferences
 

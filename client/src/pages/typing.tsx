@@ -5,9 +5,20 @@ import { useAuth } from "@/lib/auth-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Keyboard,
   Play,
@@ -17,10 +28,14 @@ import {
   Target,
   Zap,
   Loader2,
+  HelpCircle,
+  Square,
 } from "lucide-react";
 import type { TypingText, TypingSession, TypingScore } from "@shared/schema";
 
 type SessionState = "idle" | "loading" | "ready" | "running" | "finished";
+
+const TIMER_DURATION = 60;
 
 export default function TypingTest() {
   const { user } = useAuth();
@@ -28,26 +43,27 @@ export default function TypingTest() {
   const [, setLocation] = useLocation();
 
   const [state, setState] = useState<SessionState>("idle");
+  const [difficulty, setDifficulty] = useState<number>(2);
   const [session, setSession] = useState<TypingSession | null>(null);
   const [text, setText] = useState<TypingText | null>(null);
   const [typed, setTyped] = useState("");
-  const [startTime, setStartTime] = useState<number | null>(null);
-  const [elapsed, setElapsed] = useState(0);
+  const [remainingSeconds, setRemainingSeconds] = useState(TIMER_DURATION);
   const [result, setResult] = useState<{ wpm: number; accuracy: number; score?: TypingScore } | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startPerfRef = useRef<number | null>(null);
 
   const startSessionMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/typing/session");
+      const res = await apiRequest("POST", "/api/typing/session", { difficulty });
       return res.json() as Promise<{ session: TypingSession; text: TypingText }>;
     },
     onSuccess: (data) => {
       setSession(data.session);
       setText(data.text);
       setTyped("");
-      setStartTime(null);
-      setElapsed(0);
+      startPerfRef.current = null;
+      setRemainingSeconds(TIMER_DURATION);
       setResult(null);
       setState("ready");
       setTimeout(() => inputRef.current?.focus(), 100);
@@ -63,7 +79,7 @@ export default function TypingTest() {
   });
 
   const submitMutation = useMutation({
-    mutationFn: async (data: { sessionId: string; nonce: string; wpm: number; accuracy: number; durationMs: number; typed: string }) => {
+    mutationFn: async (data: { sessionId: string; nonce: string; wpm: number; accuracy: number; durationMs: number; typed: string; difficulty: number }) => {
       const res = await apiRequest("POST", "/api/typing/submit", data);
       return res.json() as Promise<TypingScore>;
     },
@@ -91,17 +107,17 @@ export default function TypingTest() {
   };
 
   const calculateResults = useCallback(() => {
-    if (!text || !startTime) return;
+    if (!text || !startPerfRef.current) return;
 
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
 
-    const durationMs = Date.now() - startTime;
+    const durationMs = performance.now() - startPerfRef.current;
     const durationMin = durationMs / 60000;
     const words = typed.trim().split(/\s+/).length;
-    const wpm = Math.round(words / durationMin);
+    const wpm = durationMin > 0 ? Math.round(words / durationMin) : 0;
 
     let correct = 0;
     const maxLen = Math.max(typed.length, text.content.length);
@@ -119,20 +135,28 @@ export default function TypingTest() {
         nonce: session.nonce,
         wpm: Math.min(wpm, 300),
         accuracy: Math.round(accuracy * 100) / 100,
-        durationMs,
+        durationMs: Math.round(durationMs),
         typed,
+        difficulty,
       });
     }
-  }, [text, startTime, typed, session]);
+  }, [text, typed, session, difficulty]);
 
   const handleInput = (value: string) => {
     if (state === "ready") {
       setState("running");
-      const now = Date.now();
-      setStartTime(now);
+      startPerfRef.current = performance.now();
+      setRemainingSeconds(TIMER_DURATION);
+      const startPerf = startPerfRef.current;
       timerRef.current = setInterval(() => {
-        setElapsed(Date.now() - now);
-      }, 100);
+        const elapsedSec = (performance.now() - startPerf) / 1000;
+        const remaining = Math.max(0, TIMER_DURATION - Math.floor(elapsedSec));
+        setRemainingSeconds(remaining);
+        if (remaining <= 0) {
+          clearInterval(timerRef.current!);
+          timerRef.current = null;
+        }
+      }, 250);
     }
 
     if (state !== "ready" && state !== "running") return;
@@ -144,22 +168,33 @@ export default function TypingTest() {
     }
   };
 
+  useEffect(() => {
+    if (state === "running" && remainingSeconds <= 0) {
+      calculateResults();
+    }
+  }, [remainingSeconds, state, calculateResults]);
+
   const handleReset = () => {
     if (timerRef.current) clearInterval(timerRef.current);
     setState("idle");
     setSession(null);
     setText(null);
     setTyped("");
-    setStartTime(null);
-    setElapsed(0);
+    startPerfRef.current = null;
+    setRemainingSeconds(TIMER_DURATION);
     setResult(null);
   };
 
-  const formatTime = (ms: number) => {
-    const s = Math.floor(ms / 1000);
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    return `${m}:${String(sec).padStart(2, "0")}`;
+  const formatCountdown = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  };
+
+  const difficultyLabel = (d: number) => {
+    if (d === 1) return "Fácil";
+    if (d === 2) return "Média";
+    return "Difícil";
   };
 
   const renderText = () => {
@@ -187,16 +222,28 @@ export default function TypingTest() {
   if (!user) return null;
 
   return (
-    <div className="container max-w-3xl py-8 px-4 space-y-6">
+    <div className="max-w-4xl w-full mx-auto px-4 py-8 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
             <Keyboard className="h-5 w-5 text-primary" />
           </div>
           <div>
-            <h1 className="text-xl font-semibold" data-testid="text-typing-title">
-              Teste de Digitação
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-semibold" data-testid="text-typing-title">
+                Teste de Digitação
+              </h1>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="cursor-help" data-testid="tooltip-typing-help">
+                    <HelpCircle className="h-4 w-4 text-muted-foreground" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs">
+                  <p className="text-sm">Digitar bem economiza tempo, reduz erros e melhora sua produtividade no dia a dia. No trabalho com computador, pequenos ganhos de velocidade e precisão viram horas no mês.</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
             <p className="text-sm text-muted-foreground">
               Pratique e melhore sua velocidade
             </p>
@@ -219,21 +266,39 @@ export default function TypingTest() {
             <div className="text-center space-y-2">
               <p className="text-lg font-medium">Pronto para começar?</p>
               <p className="text-sm text-muted-foreground">
-                Um texto aleatório será exibido. Digite-o o mais rápido possível.
+                Um texto aleatório será exibido. Digite-o o mais rápido possível em 60 segundos.
               </p>
             </div>
-            <Button
-              onClick={handleStart}
-              disabled={startSessionMutation.isPending}
-              data-testid="button-start-test"
-            >
-              {startSessionMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              ) : (
-                <Play className="h-4 w-4 mr-2" />
-              )}
-              Iniciar Teste
-            </Button>
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex items-center gap-3">
+                <label className="text-sm font-medium text-muted-foreground">Dificuldade:</label>
+                <Select
+                  value={String(difficulty)}
+                  onValueChange={(v) => setDifficulty(Number(v))}
+                >
+                  <SelectTrigger className="w-[140px]" data-testid="select-difficulty">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">Fácil</SelectItem>
+                    <SelectItem value="2">Média</SelectItem>
+                    <SelectItem value="3">Difícil</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                onClick={handleStart}
+                disabled={startSessionMutation.isPending}
+                data-testid="button-start-test"
+              >
+                {startSessionMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                ) : (
+                  <Play className="h-4 w-4 mr-2" />
+                )}
+                Iniciar Teste
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -251,18 +316,32 @@ export default function TypingTest() {
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-4">
-              <Badge variant="secondary">
+              <Badge variant={remainingSeconds <= 10 ? "destructive" : "secondary"} data-testid="badge-countdown">
                 <Clock className="h-3 w-3 mr-1" />
-                {formatTime(elapsed)}
+                {formatCountdown(remainingSeconds)}
               </Badge>
               <Badge variant="secondary">
                 {typed.length} / {text.content.length} chars
               </Badge>
+              <Badge variant="outline">
+                {difficultyLabel(difficulty)}
+              </Badge>
             </div>
-            <Button variant="outline" size="sm" onClick={handleReset} data-testid="button-reset-test">
-              <RotateCcw className="h-4 w-4 mr-2" />
-              Cancelar
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="default"
+                onClick={calculateResults}
+                disabled={state !== "running"}
+                data-testid="button-finish-test"
+              >
+                <Square className="h-4 w-4 mr-2" />
+                Finalizar
+              </Button>
+              <Button variant="outline" onClick={handleReset} data-testid="button-reset-test">
+                <RotateCcw className="h-4 w-4 mr-2" />
+                Cancelar
+              </Button>
+            </div>
           </div>
 
           <Card>
@@ -293,6 +372,7 @@ export default function TypingTest() {
             <CardTitle className="flex items-center gap-2">
               <Trophy className="h-5 w-5 text-yellow-500" />
               Resultado
+              <Badge variant="outline" className="ml-2">{difficultyLabel(difficulty)}</Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -309,7 +389,7 @@ export default function TypingTest() {
               </div>
               <div className="text-center p-4 rounded-lg bg-muted/50">
                 <Clock className="h-5 w-5 mx-auto mb-2 text-chart-4" />
-                <p className="text-3xl font-bold" data-testid="text-result-time">{formatTime(elapsed)}</p>
+                <p className="text-3xl font-bold" data-testid="text-result-time">{TIMER_DURATION - remainingSeconds}s</p>
                 <p className="text-xs text-muted-foreground">Tempo</p>
               </div>
             </div>

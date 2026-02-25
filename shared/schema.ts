@@ -445,6 +445,7 @@ export const typingScores = pgTable("typing_scores", {
   wpm: integer("wpm").notNull(),
   accuracy: numeric("accuracy", { precision: 5, scale: 2 }).notNull(),
   durationMs: integer("duration_ms").notNull(),
+  difficulty: integer("difficulty").notNull().default(1),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

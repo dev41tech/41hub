@@ -1,0 +1,154 @@
+Aplicar correções e melhorias no HUB (41-Tech-Hub):
+
+========================
+(1) BUG Typing: 400 "Duração suspeita (anti-cheat)"
+========================
+Causa provável: durationMs calculado errado (0, negativo, ou resetado), ou comparação com limites inconsistentes com o timer.
+Corrigir com abordagem robusta:
+
+BACKEND:
+- Em POST /api/typing/submit:
+  - Aceitar durationMs enviado pelo client, mas validar com tolerância:
+    - min: 10_000ms (10s)  // reduzir para evitar falso positivo
+    - max: 90_000ms (1m30) // já que o teste será de 1 minuto fixo
+  - Também calcular durationServerMs = now - session.startedAt e comparar:
+    - se abs(durationMs - durationServerMs) > 15_000ms, usar durationServerMs como fonte (mais confiável) e NÃO rejeitar.
+  - Remover rejeição “suspeita” quando durationMs estiver perto de 60s e o server indicar normal.
+  - Marcar sessão como submitted e salvar score normalmente.
+
+FRONTEND:
+- No Typing page:
+  - Start time deve ser definido no PRIMEIRO keydown (não no render).
+  - Use `performance.now()` para precisão.
+  - Ao finalizar (manual ou timeout), durationMs = performance.now() - startPerf.
+  - Garantir que durationMs nunca seja undefined/NaN.
+  - Logar (console em dev) durationMs antes de enviar.
+
+========================
+(2) Layout Typing desalinhado (muito à esquerda)
+========================
+- Ajustar página /typing:
+  - Envolver conteúdo em um container centralizado e responsivo:
+    - `max-w-4xl w-full mx-auto px-4`
+  - Usar Card com padding e grid:
+    - topo: seletor de dificuldade + botão iniciar
+    - corpo: texto alvo + textarea
+    - rodapé: timer + finalizar
+- Garantir que ocupe a largura disponível e fique simétrico.
+
+========================
+(3) Notificações: popup + som
+========================
+- Implementar “toast em tempo real” SEM WebSocket (MVP por polling):
+  - No NotificationBell (ou em um NotificationProvider global):
+    - poll /api/notifications?limit=5 a cada 15s
+    - manter em state o último notificationId visto
+    - se vier nova notificação:
+        - disparar toast (shadcn toast) com title + message + botão “Abrir”
+        - tocar som curto (beep) usando HTMLAudioElement
+- Som:
+  - adicionar arquivo mp3/wav pequeno em public/notify.mp3 (criar um simples beep se não existir; pode ser base64 inline se preferir)
+  - respeitar autoplay policies: tocar som apenas se usuário já interagiu (primeiro click) — criar flag `hasInteracted` setada no primeiro click do app.
+- Admin toggle:
+  - Respeitar notification_settings (já existe).
+- Não poluir: toast só para notificações novas (não repetir).
+
+========================
+(4) Typing: selecionar dificuldade + teste fixo 1 minuto + ranking por dificuldade
+========================
+DB:
+- Adicionar em typing_scores:
+  - difficulty int not null default 1
+- Ajustar monthKey + difficulty no leaderboard:
+  - index (monthKey, sectorId, difficulty)
+
+BACKEND:
+- POST /api/typing/session deve receber { difficulty } (1..3 por ex.)
+  - selecionar texto ativo preferencialmente dessa dificuldade
+  - se não existir texto da dificuldade, fallback para qualquer texto ativo
+- POST /api/typing/submit:
+  - salvar `difficulty` no score (da session/text)
+- GET /api/typing/leaderboard deve aceitar:
+  - difficulty=1|2|3
+  - scope=sector|global
+  - monthKey
+  - sectorId opcional
+  - ranking retorna TOP 20 por (monthKey + difficulty + scope)
+- GET /api/typing/me também recebe difficulty e retorna posição por dificuldade.
+
+FRONTEND:
+- /typing:
+  - Antes de iniciar, mostrar select “Dificuldade” (1 Fácil, 2 Média, 3 Difícil)
+  - Start cria session com essa dificuldade
+  - Timer fixo de 60s:
+      - começa no primeiro keydown
+      - mostra countdown
+      - ao chegar 0: auto-finaliza e chama submit
+  - Desabilitar botão finalizar se não começou
+- /typing/leaderboard:
+  - adicionar filtro de dificuldade (select)
+  - tabs setor/global continuam
+- Profile:
+  - badge/posição do mês deve considerar dificuldade selecionada (padrão: Média 2)
+  - ou mostrar melhor da dificuldade “Média” para simplificar
+
+========================
+(5) Auditoria: remover “Atividade Recente”
+========================
+- Em AdminAudit:
+  - remover o card/bloco “Atividade Recente”
+  - deixar apenas a lista/tabela de logs com filtros
+- Em /admin (Configurações):
+  - manter card “Auditoria” apontando para /admin/audit
+
+========================
+(6) Aba de Relatórios (export métricas)
+========================
+Objetivo: exportar CSV (MVP) para métricas de Chamados, Recursos/Apps e Notificações.
+
+BACKEND:
+Criar rotas admin:
+- GET /api/admin/reports/tickets?from=YYYY-MM-DD&to=YYYY-MM-DD&format=csv|json
+  - retornar:
+    - ticketId, createdAt, closedAt, status, priority, requesterSector, category, assignees,
+      cycleNumber, firstResponseAt, firstResponseDueAt, resolvedAt, resolutionDueAt,
+      firstResponseBreached, resolutionBreached
+- GET /api/admin/reports/resources?format=csv|json
+  - retornar:
+    - resourceId, name, type, url, owner?, updatedAt
+- GET /api/admin/reports/notifications?from=&to=&format=
+  - retornar:
+    - id, type, recipient, isRead, createdAt, linkUrl
+Implementar helper para gerar CSV no server (sem libs pesadas):
+- headers fixos + escape de aspas + separador vírgula
+- setar Content-Type e Content-Disposition.
+
+FRONTEND:
+- Criar página /admin/reports (admin only)
+  - Seções:
+    1) Chamados (date range + botão Exportar CSV + Exportar JSON)
+    2) Recursos/Apps (Exportar)
+    3) Notificações (date range + export)
+  - Ao clicar exportar, baixar arquivo (window.location ou fetch blob).
+- Adicionar card “Relatórios” em /admin (Configurações).
+
+========================
+(7) Ícone (?) com tooltip educativo no Typing
+========================
+- Na página /typing, ao lado do título “Teste de digitação”, colocar um ícone HelpCircle (lucide).
+- Tooltip (shadcn Tooltip) com texto:
+  “Digitar bem economiza tempo, reduz erros e melhora sua produtividade no dia a dia.
+   No trabalho com computador, pequenos ganhos de velocidade e precisão viram horas no mês.”
+- Texto curto e direto (sem coach).
+
+========================
+CHECKLIST
+========================
+1) Typing submit não dá mais “duração suspeita” quando usado normalmente.
+2) UI centralizada e simétrica.
+3) Notificação nova gera toast + som (após interação).
+4) Dificuldade selecionável e ranking separado por dificuldade.
+5) Auditoria só logs.
+6) Relatórios exporta CSV/JSON.
+7) Tooltip (?) aparece no typing.
+Garanta npm run check.

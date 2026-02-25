@@ -11,6 +11,7 @@ import {
   BookOpen,
   BarChart3,
   Keyboard,
+  Download,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardTitle } from "@/components/ui/card";
 import { useQuery } from "@tanstack/react-query";
@@ -85,6 +86,13 @@ const adminSections = [
     icon: Keyboard,
     href: "/admin/typing",
     color: "bg-chart-2/10 text-chart-2",
+  },
+  {
+    title: "Relatórios",
+    description: "Exportar dados em CSV e JSON",
+    icon: Download,
+    href: "/admin/reports",
+    color: "bg-chart-5/10 text-chart-5",
   },
 ];
 

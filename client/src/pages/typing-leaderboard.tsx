@@ -64,6 +64,7 @@ export default function TypingLeaderboard() {
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  const [selectedDifficulty, setSelectedDifficulty] = useState<string>("all");
   const [tab, setTab] = useState<"global" | "sector">("global");
   const [selectedSectorId, setSelectedSectorId] = useState<string>("all");
 
@@ -78,9 +79,12 @@ export default function TypingLeaderboard() {
   if (tab === "sector" && selectedSectorId && selectedSectorId !== "all") {
     leaderboardParams.set("sectorId", selectedSectorId);
   }
+  if (selectedDifficulty !== "all") {
+    leaderboardParams.set("difficulty", selectedDifficulty);
+  }
 
   const { data: leaderboard = [], isLoading } = useQuery<LeaderboardEntry[]>({
-    queryKey: ["/api/typing/leaderboard", leaderboardParams.toString()],
+    queryKey: ["/api/typing/leaderboard", selectedMonth, selectedDifficulty, tab, selectedSectorId],
     queryFn: async () => {
       const res = await fetch(`/api/typing/leaderboard?${leaderboardParams.toString()}`, {
         credentials: "include",
@@ -123,6 +127,17 @@ export default function TypingLeaderboard() {
             {monthOptions.map((m) => (
               <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+        <Select value={selectedDifficulty} onValueChange={setSelectedDifficulty}>
+          <SelectTrigger className="w-[160px]" data-testid="select-difficulty">
+            <SelectValue placeholder="Dificuldade" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Todas</SelectItem>
+            <SelectItem value="1">Fácil</SelectItem>
+            <SelectItem value="2">Média</SelectItem>
+            <SelectItem value="3">Difícil</SelectItem>
           </SelectContent>
         </Select>
       </div>

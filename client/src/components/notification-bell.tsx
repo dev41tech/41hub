@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Bell, Check, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -6,17 +6,90 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useLocation } from "wouter";
+import { useToast } from "@/hooks/use-toast";
 import type { Notification } from "@shared/schema";
+
+const BEEP_BASE64 = "data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YUoGAACAgICAgICAgICAgICAgICAgICAgICAgICAf3hxam1uc3R4e36AgICAgICAgICAgICBgoOEhYWGh4eHh4aGhYSDgoGAgICAgICAgH+Af4CAgICAgICAgICAgICAf39+fn19fX19fn5/f4CAgICAgICAgICAgIGBgoKCgoKCgoGBgICAgICAgICAgIB/f35+fX19fX5+f3+AgICAgICAgICAgICBgYKCgoKCgoKBgYCAgICAgICAgICAf39+fn19fX19fn5/f4CAgICAgICAgICAgIGBgoKCgoKCgoGBgICAgICAgICAgIB/f35+fX19fX5+f3+AgICAgICAgICAgICBgYKCgoKCgoKBgYCAgICAgICAgICAgH9/fn59fX19fX5+f3+AgICAgICAgICAgICBgYKCgoKCgoKBgYCAgICAgICAgICAf39+fn19fX19fn5/f4CAgICAgICAgICAgA==";
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const lastSeenIdRef = useRef<string | null>(null);
+  const hasInteractedRef = useRef(false);
+  const initializedRef = useRef(false);
+
+  useEffect(() => {
+    function handleInteraction() {
+      hasInteractedRef.current = true;
+      window.removeEventListener("click", handleInteraction);
+      window.removeEventListener("keydown", handleInteraction);
+    }
+    window.addEventListener("click", handleInteraction);
+    window.addEventListener("keydown", handleInteraction);
+    return () => {
+      window.removeEventListener("click", handleInteraction);
+      window.removeEventListener("keydown", handleInteraction);
+    };
+  }, []);
 
   const { data: countData } = useQuery<{ count: number }>({
     queryKey: ["/api/notifications/unread-count"],
-    refetchInterval: 30000,
+    refetchInterval: 15000,
   });
+
+  const { data: recentNotifications = [] } = useQuery<Notification[]>({
+    queryKey: ["/api/notifications", "polling"],
+    queryFn: async () => {
+      const res = await fetch("/api/notifications?limit=5", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    refetchInterval: 15000,
+  });
+
+  const playBeep = useCallback(() => {
+    if (!hasInteractedRef.current) return;
+    try {
+      const audio = new Audio(BEEP_BASE64);
+      audio.volume = 0.3;
+      audio.play().catch(() => {});
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (recentNotifications.length === 0) return;
+
+    const maxId = recentNotifications.reduce((max, n) =>
+      n.id > max ? n.id : max, recentNotifications[0].id
+    );
+
+    if (!initializedRef.current) {
+      lastSeenIdRef.current = maxId;
+      initializedRef.current = true;
+      return;
+    }
+
+    if (lastSeenIdRef.current !== null && maxId > lastSeenIdRef.current) {
+      const newNotifs = recentNotifications.filter(
+        (n) => lastSeenIdRef.current !== null && n.id > lastSeenIdRef.current
+      );
+
+      for (const notif of newNotifs) {
+        toast({
+          title: notif.title,
+          description: notif.message,
+        });
+      }
+
+      if (newNotifs.length > 0) {
+        playBeep();
+      }
+
+      lastSeenIdRef.current = maxId;
+    }
+  }, [recentNotifications, toast, playBeep]);
 
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
     queryKey: ["/api/notifications"],

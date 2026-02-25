@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, timestamp, integer, jsonb, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, integer, jsonb, pgEnum, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -11,6 +11,10 @@ export const openBehaviorEnum = pgEnum("open_behavior", ["HUB_ONLY", "NEW_TAB_ON
 export const overrideEffectEnum = pgEnum("override_effect", ["ALLOW", "DENY"]);
 export const healthStatusEnum = pgEnum("health_status", ["UP", "DEGRADED", "DOWN"]);
 export const authProviderEnum = pgEnum("auth_provider", ["entra", "local"]);
+export const ticketStatusEnum = pgEnum("ticket_status", ["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO", "RESOLVIDO", "CANCELADO"]);
+export const ticketPriorityEnum = pgEnum("ticket_priority", ["BAIXA", "MEDIA", "ALTA", "URGENTE"]);
+export const ticketCategoryBranchEnum = pgEnum("ticket_category_branch", ["INFRA", "DEV", "SUPORTE"]);
+export const ticketEventTypeEnum = pgEnum("ticket_event_type", ["ticket_created", "status_changed", "assignees_changed", "comment_added", "attachment_added", "resolved", "reopened", "priority_changed", "category_changed"]);
 
 // Users table
 export const users = pgTable("users", {
@@ -122,6 +126,103 @@ export const healthChecks = pgTable("health_checks", {
   details: jsonb("details").$type<Record<string, any>>().default({}),
 });
 
+// Ticket categories (hierarchical: parent=branch root, child=service)
+export const ticketCategories = pgTable("ticket_categories", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name", { length: 255 }).notNull(),
+  branch: ticketCategoryBranchEnum("branch").notNull(),
+  parentId: varchar("parent_id", { length: 36 }).references((): any => ticketCategories.id, { onDelete: "set null" }),
+  isActive: boolean("is_active").notNull().default(true),
+  createdBy: varchar("created_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Ticket SLA policies
+export const ticketSlaPolicies = pgTable("ticket_sla_policies", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name", { length: 120 }).notNull().unique(),
+  priority: ticketPriorityEnum("priority").notNull(),
+  firstResponseMinutes: integer("first_response_minutes").notNull(),
+  resolutionMinutes: integer("resolution_minutes").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Tickets
+export const tickets = pgTable("tickets", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  title: varchar("title", { length: 255 }).notNull(),
+  description: text("description").notNull(),
+  status: ticketStatusEnum("status").notNull().default("ABERTO"),
+  priority: ticketPriorityEnum("priority").notNull().default("MEDIA"),
+  requesterSectorId: varchar("requester_sector_id", { length: 36 }).notNull().references(() => sectors.id),
+  targetSectorId: varchar("target_sector_id", { length: 36 }).notNull().references(() => sectors.id),
+  categoryId: varchar("category_id", { length: 36 }).notNull().references(() => ticketCategories.id),
+  createdBy: varchar("created_by", { length: 36 }).notNull().references(() => users.id),
+  relatedResourceId: varchar("related_resource_id", { length: 36 }).references(() => resources.id, { onDelete: "set null" }),
+  tags: text("tags").array().default(sql`ARRAY[]::text[]`),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  closedAt: timestamp("closed_at"),
+});
+
+// Ticket assignees (N per ticket)
+export const ticketAssignees = pgTable("ticket_assignees", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id", { length: 36 }).notNull().references(() => tickets.id, { onDelete: "cascade" }),
+  userId: varchar("user_id", { length: 36 }).notNull().references(() => users.id, { onDelete: "cascade" }),
+  assignedAt: timestamp("assigned_at").notNull().defaultNow(),
+  assignedBy: varchar("assigned_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+}, (t) => [
+  unique().on(t.ticketId, t.userId),
+]);
+
+// Ticket comments
+export const ticketComments = pgTable("ticket_comments", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id", { length: 36 }).notNull().references(() => tickets.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  body: text("body").notNull(),
+  isInternal: boolean("is_internal").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Ticket attachments
+export const ticketAttachments = pgTable("ticket_attachments", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id", { length: 36 }).notNull().references(() => tickets.id, { onDelete: "cascade" }),
+  uploadedBy: varchar("uploaded_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  originalName: varchar("original_name", { length: 255 }).notNull(),
+  storageName: varchar("storage_name", { length: 255 }).notNull().unique(),
+  mimeType: varchar("mime_type", { length: 120 }).notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Ticket SLA cycles (reopening = new cycle)
+export const ticketSlaCycles = pgTable("ticket_sla_cycles", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id", { length: 36 }).notNull().references(() => tickets.id, { onDelete: "cascade" }),
+  cycleNumber: integer("cycle_number").notNull(),
+  openedAt: timestamp("opened_at").notNull(),
+  firstResponseDueAt: timestamp("first_response_due_at").notNull(),
+  resolutionDueAt: timestamp("resolution_due_at").notNull(),
+  firstResponseAt: timestamp("first_response_at"),
+  resolvedAt: timestamp("resolved_at"),
+  firstResponseBreached: boolean("first_response_breached").notNull().default(false),
+  resolutionBreached: boolean("resolution_breached").notNull().default(false),
+});
+
+// Ticket events (for metrics/history)
+export const ticketEvents = pgTable("ticket_events", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id", { length: 36 }).notNull().references(() => tickets.id, { onDelete: "cascade" }),
+  actorUserId: varchar("actor_user_id", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  type: ticketEventTypeEnum("type").notNull(),
+  data: jsonb("data").$type<Record<string, any>>().default({}),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -161,6 +262,28 @@ export const insertAdminSettingSchema = createInsertSchema(adminSettings).omit({
   updatedAt: true,
 });
 
+export const insertTicketCategorySchema = createInsertSchema(ticketCategories).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertTicketSlaPolicySchema = createInsertSchema(ticketSlaPolicies).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertTicketSchema = createInsertSchema(tickets).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  closedAt: true,
+});
+
+export const insertTicketCommentSchema = createInsertSchema(ticketComments).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -192,6 +315,26 @@ export type HealthCheck = typeof healthChecks.$inferSelect;
 export type AdminSetting = typeof adminSettings.$inferSelect;
 export type InsertAdminSetting = z.infer<typeof insertAdminSettingSchema>;
 
+export type TicketCategory = typeof ticketCategories.$inferSelect;
+export type InsertTicketCategory = z.infer<typeof insertTicketCategorySchema>;
+
+export type TicketSlaPolicy = typeof ticketSlaPolicies.$inferSelect;
+export type InsertTicketSlaPolicy = z.infer<typeof insertTicketSlaPolicySchema>;
+
+export type Ticket = typeof tickets.$inferSelect;
+export type InsertTicket = z.infer<typeof insertTicketSchema>;
+
+export type TicketAssignee = typeof ticketAssignees.$inferSelect;
+
+export type TicketComment = typeof ticketComments.$inferSelect;
+export type InsertTicketComment = z.infer<typeof insertTicketCommentSchema>;
+
+export type TicketAttachment = typeof ticketAttachments.$inferSelect;
+
+export type TicketSlaCycle = typeof ticketSlaCycles.$inferSelect;
+
+export type TicketEvent = typeof ticketEvents.$inferSelect;
+
 // Extended types for frontend
 export type ResourceWithHealth = Resource & {
   healthStatus?: "UP" | "DEGRADED" | "DOWN";
@@ -219,4 +362,19 @@ export type TeamMember = {
     sectorName: string;
     roleName: "Admin" | "Coordenador" | "Usuario";
   }>;
+};
+
+export type TicketWithDetails = Ticket & {
+  requesterSectorName?: string;
+  targetSectorName?: string;
+  categoryName?: string;
+  categoryBranch?: "INFRA" | "DEV" | "SUPORTE";
+  creatorName?: string;
+  creatorEmail?: string;
+  assignees?: Array<{ userId: string; userName: string; userEmail: string }>;
+  currentCycle?: TicketSlaCycle | null;
+};
+
+export type TicketCategoryTree = TicketCategory & {
+  children?: TicketCategory[];
 };

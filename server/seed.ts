@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { users, sectors, roles, userSectorRoles, resources, healthChecks } from "@shared/schema";
+import { users, sectors, roles, userSectorRoles, resources, healthChecks, ticketSlaPolicies, ticketCategories } from "@shared/schema";
 import { eq } from "drizzle-orm";
 
 export async function seed() {
@@ -10,6 +10,7 @@ export async function seed() {
     const existingSectors = await db.select().from(sectors);
     if (existingSectors.length > 0) {
       console.log("Database already seeded, skipping...");
+      await ensureTicketDefaults();
       return;
     }
 
@@ -277,5 +278,43 @@ export async function seed() {
   } catch (error) {
     console.error("Error seeding database:", error);
     throw error;
+  }
+
+  await ensureTicketDefaults();
+}
+
+async function ensureTicketDefaults() {
+  try {
+    const defaultPolicies = [
+      { name: "SLA Urgente", priority: "URGENTE" as const, firstResponseMinutes: 60, resolutionMinutes: 480 },
+      { name: "SLA Alta", priority: "ALTA" as const, firstResponseMinutes: 240, resolutionMinutes: 1440 },
+      { name: "SLA Média", priority: "MEDIA" as const, firstResponseMinutes: 480, resolutionMinutes: 4320 },
+      { name: "SLA Baixa", priority: "BAIXA" as const, firstResponseMinutes: 1440, resolutionMinutes: 10080 },
+    ];
+
+    for (const policy of defaultPolicies) {
+      const [existing] = await db.select().from(ticketSlaPolicies).where(eq(ticketSlaPolicies.name, policy.name));
+      if (!existing) {
+        await db.insert(ticketSlaPolicies).values(policy);
+        console.log(`Created SLA policy: ${policy.name}`);
+      }
+    }
+
+    const branches = ["INFRA", "DEV", "SUPORTE"] as const;
+    for (const branch of branches) {
+      const [existing] = await db.select().from(ticketCategories)
+        .where(eq(ticketCategories.name, branch));
+      if (!existing) {
+        await db.insert(ticketCategories).values({
+          name: branch,
+          branch,
+          parentId: null,
+          isActive: true,
+        });
+        console.log(`Created ticket category root: ${branch}`);
+      }
+    }
+  } catch (error) {
+    console.error("Error ensuring ticket defaults:", error);
   }
 }

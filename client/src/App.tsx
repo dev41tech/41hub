@@ -30,6 +30,11 @@ import AdminUsers from "@/pages/admin/users";
 import AdminResources from "@/pages/admin/resources";
 import AdminAudit from "@/pages/admin/audit";
 import AdminSettings from "@/pages/admin/settings";
+import AdminTicketCategories from "@/pages/admin/ticket-categories";
+import AdminTicketSlaPolicies from "@/pages/admin/ticket-sla";
+import TicketsIndex from "@/pages/tickets/index";
+import TicketsNew from "@/pages/tickets/new";
+import TicketsDetail from "@/pages/tickets/detail";
 
 function Router() {
   return (
@@ -40,12 +45,17 @@ function Router() {
       <Route path="/favorites" component={Favorites} />
       <Route path="/profile" component={Profile} />
       <Route path="/resource/:id" component={ResourceViewer} />
+      <Route path="/tickets" component={TicketsIndex} />
+      <Route path="/tickets/new" component={TicketsNew} />
+      <Route path="/tickets/:id" component={TicketsDetail} />
       <Route path="/admin" component={AdminIndex} />
       <Route path="/admin/sectors" component={AdminSectors} />
       <Route path="/admin/users" component={AdminUsers} />
       <Route path="/admin/resources" component={AdminResources} />
       <Route path="/admin/audit" component={AdminAudit} />
       <Route path="/admin/settings" component={AdminSettings} />
+      <Route path="/admin/tickets/categories" component={AdminTicketCategories} />
+      <Route path="/admin/tickets/sla" component={AdminTicketSlaPolicies} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, inArray } from "drizzle-orm";
+import { eq, and, desc, sql, inArray, or, ilike, ne, asc } from "drizzle-orm";
 import { db } from "./db";
 import {
   users,
@@ -12,6 +12,14 @@ import {
   auditLogs,
   healthChecks,
   adminSettings,
+  ticketCategories,
+  ticketSlaPolicies,
+  tickets,
+  ticketAssignees,
+  ticketComments,
+  ticketAttachments,
+  ticketSlaCycles,
+  ticketEvents,
   type User,
   type InsertUser,
   type Sector,
@@ -31,7 +39,19 @@ import {
   type UserWithRoles,
   type ResourceWithHealth,
   type AdminSetting,
+  type TicketCategory,
+  type InsertTicketCategory,
+  type TicketSlaPolicy,
+  type InsertTicketSlaPolicy,
+  type Ticket,
+  type TicketWithDetails,
+  type TicketComment,
+  type TicketAttachment,
+  type TicketSlaCycle,
+  type TicketCategoryTree,
+  type TicketAssignee,
 } from "@shared/schema";
+import { computeSlaDueDates } from "./lib/sla";
 
 export interface IStorage {
   // Users
@@ -126,6 +146,67 @@ export interface IStorage {
   getSetting(key: string): Promise<AdminSetting | undefined>;
   setSetting(key: string, value: string): Promise<AdminSetting>;
   getAllSettings(): Promise<AdminSetting[]>;
+
+  // Sectors by name
+  getSectorByName(name: string): Promise<Sector | undefined>;
+
+  // Ticket Categories
+  listTicketCategoriesActive(): Promise<TicketCategoryTree[]>;
+  listAllTicketCategories(): Promise<TicketCategory[]>;
+  createTicketCategory(data: InsertTicketCategory): Promise<TicketCategory>;
+  updateTicketCategory(id: string, data: Partial<InsertTicketCategory>): Promise<TicketCategory | undefined>;
+  disableTicketCategory(id: string): Promise<boolean>;
+
+  // Ticket SLA Policies
+  listSlaPolicies(): Promise<TicketSlaPolicy[]>;
+  createSlaPolicy(data: InsertTicketSlaPolicy): Promise<TicketSlaPolicy>;
+  updateSlaPolicy(id: string, data: Partial<InsertTicketSlaPolicy>): Promise<TicketSlaPolicy | undefined>;
+
+  // Tickets
+  createTicket(data: {
+    title: string;
+    description: string;
+    requesterSectorId: string;
+    categoryId: string;
+    priority?: "BAIXA" | "MEDIA" | "ALTA" | "URGENTE";
+    relatedResourceId?: string;
+    tags?: string[];
+  }, actorUser: UserWithRoles): Promise<Ticket>;
+
+  listTicketsForUser(user: UserWithRoles, filters: {
+    status?: string;
+    q?: string;
+    includeClosed?: boolean;
+  }): Promise<TicketWithDetails[]>;
+
+  getTicketDetail(ticketId: string, user: UserWithRoles): Promise<TicketWithDetails | undefined>;
+
+  adminUpdateTicket(ticketId: string, patch: Partial<{
+    status: string;
+    priority: string;
+    categoryId: string;
+    relatedResourceId: string | null;
+    tags: string[];
+    title: string;
+    description: string;
+  }>, actorUser: UserWithRoles): Promise<Ticket | undefined>;
+
+  adminSetAssignees(ticketId: string, assigneeIds: string[], actorUser: UserWithRoles): Promise<void>;
+
+  addTicketComment(ticketId: string, authorUser: UserWithRoles, data: {
+    body: string;
+    isInternal?: boolean;
+  }): Promise<TicketComment>;
+
+  addTicketAttachment(ticketId: string, authorUser: UserWithRoles, fileMeta: {
+    originalName: string;
+    storageName: string;
+    mimeType: string;
+    sizeBytes: number;
+  }): Promise<TicketAttachment>;
+
+  listTicketComments(ticketId: string, user: UserWithRoles): Promise<(TicketComment & { authorName?: string; authorEmail?: string })[]>;
+  listTicketAttachments(ticketId: string, user: UserWithRoles): Promise<TicketAttachment[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -748,6 +829,490 @@ export class DatabaseStorage implements IStorage {
 
   async getAllSettings(): Promise<AdminSetting[]> {
     return db.select().from(adminSettings);
+  }
+
+  // Sectors by name
+  async getSectorByName(name: string): Promise<Sector | undefined> {
+    const [sector] = await db.select().from(sectors).where(eq(sectors.name, name));
+    return sector;
+  }
+
+  // Ticket Categories
+  async listTicketCategoriesActive(): Promise<TicketCategoryTree[]> {
+    const all = await db.select().from(ticketCategories)
+      .where(eq(ticketCategories.isActive, true))
+      .orderBy(ticketCategories.branch, ticketCategories.name);
+
+    const roots = all.filter(c => !c.parentId);
+    return roots.map(root => ({
+      ...root,
+      children: all.filter(c => c.parentId === root.id),
+    }));
+  }
+
+  async listAllTicketCategories(): Promise<TicketCategory[]> {
+    return db.select().from(ticketCategories).orderBy(ticketCategories.branch, ticketCategories.name);
+  }
+
+  async createTicketCategory(data: InsertTicketCategory): Promise<TicketCategory> {
+    const [cat] = await db.insert(ticketCategories).values(data).returning();
+    return cat;
+  }
+
+  async updateTicketCategory(id: string, data: Partial<InsertTicketCategory>): Promise<TicketCategory | undefined> {
+    const [updated] = await db.update(ticketCategories).set(data).where(eq(ticketCategories.id, id)).returning();
+    return updated;
+  }
+
+  async disableTicketCategory(id: string): Promise<boolean> {
+    await db.update(ticketCategories).set({ isActive: false }).where(eq(ticketCategories.id, id));
+    return true;
+  }
+
+  // Ticket SLA Policies
+  async listSlaPolicies(): Promise<TicketSlaPolicy[]> {
+    return db.select().from(ticketSlaPolicies).orderBy(ticketSlaPolicies.priority);
+  }
+
+  async createSlaPolicy(data: InsertTicketSlaPolicy): Promise<TicketSlaPolicy> {
+    const [policy] = await db.insert(ticketSlaPolicies).values(data).returning();
+    return policy;
+  }
+
+  async updateSlaPolicy(id: string, data: Partial<InsertTicketSlaPolicy>): Promise<TicketSlaPolicy | undefined> {
+    const [updated] = await db.update(ticketSlaPolicies).set(data).where(eq(ticketSlaPolicies.id, id)).returning();
+    return updated;
+  }
+
+  // Tickets
+  async createTicket(data: {
+    title: string;
+    description: string;
+    requesterSectorId: string;
+    categoryId: string;
+    priority?: "BAIXA" | "MEDIA" | "ALTA" | "URGENTE";
+    relatedResourceId?: string;
+    tags?: string[];
+  }, actorUser: UserWithRoles): Promise<Ticket> {
+    const targetSectorName = process.env.TICKETS_TARGET_SECTOR_NAME || "Tech";
+    const targetSector = await this.getSectorByName(targetSectorName);
+    if (!targetSector) throw new Error(`Target sector "${targetSectorName}" not found`);
+
+    const priority = data.priority || "MEDIA";
+
+    const [ticket] = await db.insert(tickets).values({
+      title: data.title,
+      description: data.description,
+      status: "ABERTO",
+      priority,
+      requesterSectorId: data.requesterSectorId,
+      targetSectorId: targetSector.id,
+      categoryId: data.categoryId,
+      createdBy: actorUser.id,
+      relatedResourceId: data.relatedResourceId || null,
+      tags: data.tags || [],
+    }).returning();
+
+    const now = new Date();
+    const dueDates = await computeSlaDueDates(now, priority);
+    await db.insert(ticketSlaCycles).values({
+      ticketId: ticket.id,
+      cycleNumber: 1,
+      openedAt: now,
+      firstResponseDueAt: dueDates.firstResponseDueAt,
+      resolutionDueAt: dueDates.resolutionDueAt,
+    });
+
+    await db.insert(ticketEvents).values({
+      ticketId: ticket.id,
+      actorUserId: actorUser.id,
+      type: "ticket_created",
+      data: { priority, categoryId: data.categoryId },
+    });
+
+    await this.createAuditLog({
+      actorUserId: actorUser.id,
+      action: "ticket_create",
+      targetType: "ticket",
+      targetId: ticket.id,
+      metadata: { title: data.title },
+    });
+
+    return ticket;
+  }
+
+  private async enrichTickets(rawTickets: Ticket[]): Promise<TicketWithDetails[]> {
+    if (rawTickets.length === 0) return [];
+
+    const result: TicketWithDetails[] = [];
+    for (const t of rawTickets) {
+      const enriched = await this.enrichSingleTicket(t);
+      result.push(enriched);
+    }
+    return result;
+  }
+
+  private async enrichSingleTicket(t: Ticket): Promise<TicketWithDetails> {
+    const [reqSector] = await db.select({ name: sectors.name }).from(sectors).where(eq(sectors.id, t.requesterSectorId));
+    const [tgtSector] = await db.select({ name: sectors.name }).from(sectors).where(eq(sectors.id, t.targetSectorId));
+    const [cat] = await db.select().from(ticketCategories).where(eq(ticketCategories.id, t.categoryId));
+    const [creator] = await db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, t.createdBy));
+
+    const assigneeRows = await db
+      .select({ userId: ticketAssignees.userId, userName: users.name, userEmail: users.email })
+      .from(ticketAssignees)
+      .innerJoin(users, eq(ticketAssignees.userId, users.id))
+      .where(eq(ticketAssignees.ticketId, t.id));
+
+    const [currentCycle] = await db.select().from(ticketSlaCycles)
+      .where(eq(ticketSlaCycles.ticketId, t.id))
+      .orderBy(desc(ticketSlaCycles.cycleNumber))
+      .limit(1);
+
+    return {
+      ...t,
+      requesterSectorName: reqSector?.name,
+      targetSectorName: tgtSector?.name,
+      categoryName: cat?.name,
+      categoryBranch: cat?.branch as "INFRA" | "DEV" | "SUPORTE" | undefined,
+      creatorName: creator?.name,
+      creatorEmail: creator?.email,
+      assignees: assigneeRows,
+      currentCycle: currentCycle || null,
+    };
+  }
+
+  async listTicketsForUser(user: UserWithRoles, filters: {
+    status?: string;
+    q?: string;
+    includeClosed?: boolean;
+  }): Promise<TicketWithDetails[]> {
+    const conditions: any[] = [];
+
+    if (!user.isAdmin) {
+      const userSectorIds = user.roles.map(r => r.sectorId);
+      const isCoordinator = user.roles.some(r => r.roleName === "Coordenador");
+
+      if (isCoordinator) {
+        const coordSectorIds = user.roles.filter(r => r.roleName === "Coordenador").map(r => r.sectorId);
+        conditions.push(or(
+          inArray(tickets.requesterSectorId, coordSectorIds),
+          eq(tickets.createdBy, user.id)
+        ));
+      } else {
+        if (userSectorIds.length > 0) {
+          conditions.push(inArray(tickets.requesterSectorId, userSectorIds));
+        } else {
+          conditions.push(eq(tickets.createdBy, user.id));
+        }
+      }
+    }
+
+    if (filters.status) {
+      conditions.push(eq(tickets.status, filters.status as any));
+    } else if (!filters.includeClosed) {
+      conditions.push(inArray(tickets.status, ["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO"]));
+    }
+
+    if (filters.q) {
+      conditions.push(or(
+        ilike(tickets.title, `%${filters.q}%`),
+        ilike(tickets.description, `%${filters.q}%`)
+      ));
+    }
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const rawTickets = await db.select().from(tickets)
+      .where(where)
+      .orderBy(desc(tickets.createdAt))
+      .limit(200);
+
+    return this.enrichTickets(rawTickets);
+  }
+
+  async getTicketDetail(ticketId: string, user: UserWithRoles): Promise<TicketWithDetails | undefined> {
+    const [ticket] = await db.select().from(tickets).where(eq(tickets.id, ticketId));
+    if (!ticket) return undefined;
+
+    if (!user.isAdmin) {
+      const userSectorIds = user.roles.map(r => r.sectorId);
+      const isCoordinator = user.roles.some(r => r.roleName === "Coordenador");
+
+      if (isCoordinator) {
+        const coordSectorIds = user.roles.filter(r => r.roleName === "Coordenador").map(r => r.sectorId);
+        if (!coordSectorIds.includes(ticket.requesterSectorId) && ticket.createdBy !== user.id) {
+          return undefined;
+        }
+      } else {
+        if (!userSectorIds.includes(ticket.requesterSectorId)) {
+          return undefined;
+        }
+      }
+    }
+
+    return this.enrichSingleTicket(ticket);
+  }
+
+  async adminUpdateTicket(ticketId: string, patch: Partial<{
+    status: string;
+    priority: string;
+    categoryId: string;
+    relatedResourceId: string | null;
+    tags: string[];
+    title: string;
+    description: string;
+  }>, actorUser: UserWithRoles): Promise<Ticket | undefined> {
+    const [existing] = await db.select().from(tickets).where(eq(tickets.id, ticketId));
+    if (!existing) return undefined;
+
+    const updateData: any = { updatedAt: new Date() };
+    if (patch.title !== undefined) updateData.title = patch.title;
+    if (patch.description !== undefined) updateData.description = patch.description;
+    if (patch.categoryId !== undefined) updateData.categoryId = patch.categoryId;
+    if (patch.relatedResourceId !== undefined) updateData.relatedResourceId = patch.relatedResourceId;
+    if (patch.tags !== undefined) updateData.tags = patch.tags;
+    if (patch.priority !== undefined) updateData.priority = patch.priority;
+    if (patch.status !== undefined) updateData.status = patch.status;
+
+    if (patch.status && patch.status !== existing.status) {
+      if (patch.status === "RESOLVIDO") {
+        updateData.closedAt = new Date();
+        const [cycle] = await db.select().from(ticketSlaCycles)
+          .where(eq(ticketSlaCycles.ticketId, ticketId))
+          .orderBy(desc(ticketSlaCycles.cycleNumber))
+          .limit(1);
+        if (cycle && !cycle.resolvedAt) {
+          const now = new Date();
+          const breached = now > cycle.resolutionDueAt;
+          await db.update(ticketSlaCycles).set({
+            resolvedAt: now,
+            resolutionBreached: breached,
+          }).where(eq(ticketSlaCycles.id, cycle.id));
+        }
+        await db.insert(ticketEvents).values({
+          ticketId, actorUserId: actorUser.id, type: "resolved",
+          data: { previousStatus: existing.status },
+        });
+      } else if (patch.status === "ABERTO" && (existing.status === "RESOLVIDO" || existing.status === "CANCELADO")) {
+        updateData.closedAt = null;
+        const [lastCycle] = await db.select().from(ticketSlaCycles)
+          .where(eq(ticketSlaCycles.ticketId, ticketId))
+          .orderBy(desc(ticketSlaCycles.cycleNumber))
+          .limit(1);
+        const newCycleNum = (lastCycle?.cycleNumber || 0) + 1;
+        const priority = (patch.priority || existing.priority) as "BAIXA" | "MEDIA" | "ALTA" | "URGENTE";
+        const now = new Date();
+        const dueDates = await computeSlaDueDates(now, priority);
+        await db.insert(ticketSlaCycles).values({
+          ticketId, cycleNumber: newCycleNum, openedAt: now,
+          firstResponseDueAt: dueDates.firstResponseDueAt,
+          resolutionDueAt: dueDates.resolutionDueAt,
+        });
+        await db.insert(ticketEvents).values({
+          ticketId, actorUserId: actorUser.id, type: "reopened",
+          data: { cycleNumber: newCycleNum },
+        });
+      } else {
+        await db.insert(ticketEvents).values({
+          ticketId, actorUserId: actorUser.id, type: "status_changed",
+          data: { from: existing.status, to: patch.status },
+        });
+      }
+    }
+
+    if (patch.priority && patch.priority !== existing.priority) {
+      await db.insert(ticketEvents).values({
+        ticketId, actorUserId: actorUser.id, type: "priority_changed",
+        data: { from: existing.priority, to: patch.priority },
+      });
+    }
+
+    if (patch.categoryId && patch.categoryId !== existing.categoryId) {
+      await db.insert(ticketEvents).values({
+        ticketId, actorUserId: actorUser.id, type: "category_changed",
+        data: { from: existing.categoryId, to: patch.categoryId },
+      });
+    }
+
+    const [updated] = await db.update(tickets).set(updateData).where(eq(tickets.id, ticketId)).returning();
+
+    await this.createAuditLog({
+      actorUserId: actorUser.id,
+      action: "ticket_update",
+      targetType: "ticket",
+      targetId: ticketId,
+      metadata: patch,
+    });
+
+    return updated;
+  }
+
+  async adminSetAssignees(ticketId: string, assigneeIds: string[], actorUser: UserWithRoles): Promise<void> {
+    const existing = await db.select().from(ticketAssignees).where(eq(ticketAssignees.ticketId, ticketId));
+    const existingIds = existing.map(a => a.userId);
+
+    const toRemove = existingIds.filter(id => !assigneeIds.includes(id));
+    const toAdd = assigneeIds.filter(id => !existingIds.includes(id));
+
+    for (const uid of toRemove) {
+      await db.delete(ticketAssignees).where(
+        and(eq(ticketAssignees.ticketId, ticketId), eq(ticketAssignees.userId, uid))
+      );
+    }
+
+    for (const uid of toAdd) {
+      await db.insert(ticketAssignees).values({
+        ticketId, userId: uid, assignedBy: actorUser.id,
+      });
+    }
+
+    if (toAdd.length > 0) {
+      const [cycle] = await db.select().from(ticketSlaCycles)
+        .where(eq(ticketSlaCycles.ticketId, ticketId))
+        .orderBy(desc(ticketSlaCycles.cycleNumber))
+        .limit(1);
+      if (cycle && !cycle.firstResponseAt) {
+        const now = new Date();
+        const breached = now > cycle.firstResponseDueAt;
+        await db.update(ticketSlaCycles).set({
+          firstResponseAt: now,
+          firstResponseBreached: breached,
+        }).where(eq(ticketSlaCycles.id, cycle.id));
+      }
+    }
+
+    await db.insert(ticketEvents).values({
+      ticketId, actorUserId: actorUser.id, type: "assignees_changed",
+      data: { assigneeIds, added: toAdd, removed: toRemove },
+    });
+
+    await this.createAuditLog({
+      actorUserId: actorUser.id,
+      action: "ticket_assignees",
+      targetType: "ticket",
+      targetId: ticketId,
+      metadata: { assigneeIds },
+    });
+  }
+
+  async addTicketComment(ticketId: string, authorUser: UserWithRoles, data: {
+    body: string;
+    isInternal?: boolean;
+  }): Promise<TicketComment> {
+    const [ticket] = await db.select().from(tickets).where(eq(tickets.id, ticketId));
+    if (!ticket) throw new Error("Ticket not found");
+
+    if (!authorUser.isAdmin) {
+      if (ticket.status !== "AGUARDANDO_USUARIO") {
+        throw new Error("Comentários só são permitidos quando o chamado está aguardando usuário");
+      }
+      if (data.isInternal) {
+        throw new Error("Comentários internos são exclusivos para administradores");
+      }
+    }
+
+    const [comment] = await db.insert(ticketComments).values({
+      ticketId,
+      authorId: authorUser.id,
+      body: data.body,
+      isInternal: authorUser.isAdmin ? (data.isInternal || false) : false,
+    }).returning();
+
+    if (authorUser.isAdmin) {
+      const [cycle] = await db.select().from(ticketSlaCycles)
+        .where(eq(ticketSlaCycles.ticketId, ticketId))
+        .orderBy(desc(ticketSlaCycles.cycleNumber))
+        .limit(1);
+      if (cycle && !cycle.firstResponseAt) {
+        const now = new Date();
+        const breached = now > cycle.firstResponseDueAt;
+        await db.update(ticketSlaCycles).set({
+          firstResponseAt: now,
+          firstResponseBreached: breached,
+        }).where(eq(ticketSlaCycles.id, cycle.id));
+      }
+    }
+
+    await db.insert(ticketEvents).values({
+      ticketId, actorUserId: authorUser.id, type: "comment_added",
+      data: { commentId: comment.id, isInternal: comment.isInternal },
+    });
+
+    await this.createAuditLog({
+      actorUserId: authorUser.id,
+      action: "ticket_comment",
+      targetType: "ticket",
+      targetId: ticketId,
+    });
+
+    return comment;
+  }
+
+  async addTicketAttachment(ticketId: string, authorUser: UserWithRoles, fileMeta: {
+    originalName: string;
+    storageName: string;
+    mimeType: string;
+    sizeBytes: number;
+  }): Promise<TicketAttachment> {
+    const [ticket] = await db.select().from(tickets).where(eq(tickets.id, ticketId));
+    if (!ticket) throw new Error("Ticket not found");
+
+    if (!authorUser.isAdmin) {
+      if (ticket.status !== "AGUARDANDO_USUARIO") {
+        throw new Error("Anexos só são permitidos quando o chamado está aguardando usuário");
+      }
+    }
+
+    const [attachment] = await db.insert(ticketAttachments).values({
+      ticketId,
+      uploadedBy: authorUser.id,
+      ...fileMeta,
+    }).returning();
+
+    await db.insert(ticketEvents).values({
+      ticketId, actorUserId: authorUser.id, type: "attachment_added",
+      data: { attachmentId: attachment.id, originalName: fileMeta.originalName },
+    });
+
+    await this.createAuditLog({
+      actorUserId: authorUser.id,
+      action: "ticket_attachment",
+      targetType: "ticket",
+      targetId: ticketId,
+      metadata: { originalName: fileMeta.originalName },
+    });
+
+    return attachment;
+  }
+
+  async listTicketComments(ticketId: string, user: UserWithRoles): Promise<(TicketComment & { authorName?: string; authorEmail?: string })[]> {
+    let conditions: any = eq(ticketComments.ticketId, ticketId);
+    if (!user.isAdmin) {
+      conditions = and(conditions, eq(ticketComments.isInternal, false));
+    }
+
+    const comments = await db
+      .select({
+        comment: ticketComments,
+        authorName: users.name,
+        authorEmail: users.email,
+      })
+      .from(ticketComments)
+      .leftJoin(users, eq(ticketComments.authorId, users.id))
+      .where(conditions)
+      .orderBy(asc(ticketComments.createdAt));
+
+    return comments.map(c => ({
+      ...c.comment,
+      authorName: c.authorName || undefined,
+      authorEmail: c.authorEmail || undefined,
+    }));
+  }
+
+  async listTicketAttachments(ticketId: string, user: UserWithRoles): Promise<TicketAttachment[]> {
+    return db.select().from(ticketAttachments)
+      .where(eq(ticketAttachments.ticketId, ticketId))
+      .orderBy(asc(ticketAttachments.createdAt));
   }
 }
 

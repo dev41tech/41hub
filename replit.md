@@ -49,7 +49,7 @@ Preferred communication style: Simple, everyday language.
 - **ORM**: Drizzle ORM with drizzle-zod for schema validation
 - **Schema Location**: `shared/schema.ts` (shared between frontend and backend)
 - **Migrations**: Drizzle Kit with `db:push` command
-- **Key Tables**: users, sectors, roles, user_sector_roles, resources, resource_overrides, favorites, recent_access, audit_logs, health_checks
+- **Key Tables**: users, sectors, roles, user_sector_roles, resources, resource_overrides, favorites, recent_access, audit_logs, health_checks, ticket_categories, ticket_sla_policies, tickets, ticket_assignees, ticket_comments, ticket_attachments, ticket_sla_cycles, ticket_events
 
 ### Authentication Flow
 **Microsoft Entra ID:**

@@ -7,6 +7,7 @@ import {
   Settings,
   LogOut,
   User,
+  Ticket,
 } from "lucide-react";
 import { ThemeLogo } from "@/components/theme-logo";
 import {
@@ -36,6 +37,7 @@ const mainMenuItems = [
   { title: "Home", url: "/", icon: Home },
   { title: "Apps", url: "/apps", icon: LayoutGrid },
   { title: "Dashboards", url: "/dashboards", icon: BarChart3 },
+  { title: "Chamados", url: "/tickets", icon: Ticket },
   { title: "Favoritos", url: "/favorites", icon: Star },
 ];
 
@@ -75,7 +77,7 @@ export function AppSidebar() {
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton
                     asChild
-                    isActive={location === item.url}
+                    isActive={item.url === "/" ? location === "/" : location.startsWith(item.url)}
                     data-testid={`nav-${item.title.toLowerCase()}`}
                   >
                     <Link href={item.url}>

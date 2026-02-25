@@ -8,6 +8,8 @@ import {
   Shield,
   Clock,
   Settings,
+  FolderTree,
+  Timer,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -69,6 +71,20 @@ const adminSections = [
     href: "/admin/settings",
     color: "bg-chart-5/10 text-chart-5",
   },
+  {
+    title: "Categorias de Chamados",
+    description: "Gerenciar categorias e subcategorias",
+    icon: FolderTree,
+    href: "/admin/tickets/categories",
+    color: "bg-primary/10 text-primary",
+  },
+  {
+    title: "Políticas SLA",
+    description: "Gerenciar SLAs por prioridade",
+    icon: Timer,
+    href: "/admin/tickets/sla",
+    color: "bg-chart-2/10 text-chart-2",
+  },
 ];
 
 function formatAction(action: string): string {
@@ -89,6 +105,14 @@ function formatAction(action: string): string {
     resource_access: "Acessou recurso",
     favorite_add: "Adicionou favorito",
     favorite_remove: "Removeu favorito",
+    ticket_create: "Criou chamado",
+    ticket_update: "Atualizou chamado",
+    ticket_assignees: "Atribuiu responsáveis",
+    ticket_comment: "Comentou chamado",
+    ticket_attachment: "Anexou arquivo",
+    ticket_category_create: "Criou categoria",
+    ticket_category_update: "Atualizou categoria",
+    ticket_category_disable: "Desativou categoria",
   };
   return actionMap[action] || action;
 }

@@ -1,12 +1,15 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import { z } from "zod";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 import bcrypt from "bcrypt";
 import { storage } from "./storage";
+import { pool } from "./db";
 import type { UserWithRoles } from "@shared/schema";
 
 const SALT_ROUNDS = 12;
@@ -45,13 +48,43 @@ const photoStorage = multer.diskStorage({
 
 const upload = multer({
   storage: photoStorage,
-  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
+  limits: { fileSize: 2 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ["image/jpeg", "image/png"];
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
       cb(new Error("Only JPEG and PNG images are allowed"));
+    }
+  },
+});
+
+const ticketUploadDir = path.join(process.cwd(), "uploads", "tickets");
+if (!fs.existsSync(ticketUploadDir)) {
+  fs.mkdirSync(ticketUploadDir, { recursive: true });
+}
+
+const ticketAttachmentStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, ticketUploadDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const rand = crypto.randomBytes(8).toString("hex");
+    const filename = `${req.params.id}-${Date.now()}-${rand}${ext}`;
+    cb(null, filename);
+  },
+});
+
+const ticketUpload = multer({
+  storage: ticketAttachmentStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ["image/jpeg", "image/png", "application/pdf"];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only JPEG, PNG and PDF files are allowed"));
     }
   },
 });
@@ -161,17 +194,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     throw new Error("SESSION_SECRET environment variable is required in production");
   }
 
-  // Session middleware
+  const PgSession = connectPgSimple(session);
+
   app.use(
     session({
+      store: new PgSession({ pool, createTableIfMissing: true }),
       secret: sessionSecret || "41hub-dev-only-secret",
       resave: false,
       saveUninitialized: false,
       cookie: {
         secure: process.env.NODE_ENV === "production",
         httpOnly: true,
-        sameSite: "strict", // CSRF protection via SameSite cookie
-        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+        sameSite: "strict",
+        maxAge: 24 * 60 * 60 * 1000,
       },
     })
   );
@@ -1127,6 +1162,361 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (error) {
       console.error("Error fetching audit logs:", error);
       res.status(500).json({ error: "Failed to fetch audit logs" });
+    }
+  });
+
+  // ==================== TICKET ROUTES ====================
+
+  app.get("/api/tickets/categories", requireAuth, async (req, res) => {
+    try {
+      const categories = await storage.listTicketCategoriesActive();
+      res.json(categories);
+    } catch (error) {
+      console.error("Error fetching categories:", error);
+      res.status(500).json({ error: "Failed to fetch categories" });
+    }
+  });
+
+  app.get("/api/tickets", requireAuth, async (req, res) => {
+    try {
+      const filters = {
+        status: req.query.status as string | undefined,
+        q: req.query.q as string | undefined,
+        includeClosed: req.query.includeClosed === "true",
+      };
+      const ticketList = await storage.listTicketsForUser(req.user!, filters);
+      res.json(ticketList);
+    } catch (error) {
+      console.error("Error listing tickets:", error);
+      res.status(500).json({ error: "Failed to list tickets" });
+    }
+  });
+
+  app.post("/api/tickets", requireAuth, requireAdminOrCoordinator, async (req, res) => {
+    try {
+      const createTicketSchema = z.object({
+        title: z.string().min(1).max(255),
+        description: z.string().min(1),
+        requesterSectorId: z.string().min(1),
+        categoryId: z.string().min(1),
+        priority: z.enum(["BAIXA", "MEDIA", "ALTA", "URGENTE"]).optional(),
+        relatedResourceId: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+      });
+
+      const parsed = createTicketSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+      }
+
+      if (!req.user!.isAdmin) {
+        const coordSectorIds = req.user!.roles
+          .filter(r => r.roleName === "Coordenador")
+          .map(r => r.sectorId);
+        if (!coordSectorIds.includes(parsed.data.requesterSectorId)) {
+          return res.status(403).json({ error: "Coordenador só pode criar chamados para setores que coordena" });
+        }
+      }
+
+      const ticket = await storage.createTicket(parsed.data, req.user!);
+      res.status(201).json(ticket);
+    } catch (error: any) {
+      console.error("Error creating ticket:", error);
+      res.status(500).json({ error: error.message || "Failed to create ticket" });
+    }
+  });
+
+  app.get("/api/tickets/:id", requireAuth, async (req, res) => {
+    try {
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+      res.json(ticket);
+    } catch (error) {
+      console.error("Error fetching ticket:", error);
+      res.status(500).json({ error: "Failed to fetch ticket" });
+    }
+  });
+
+  app.patch("/api/tickets/:id", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const patchSchema = z.object({
+        status: z.enum(["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO", "RESOLVIDO", "CANCELADO"]).optional(),
+        priority: z.enum(["BAIXA", "MEDIA", "ALTA", "URGENTE"]).optional(),
+        categoryId: z.string().optional(),
+        relatedResourceId: z.string().nullable().optional(),
+        tags: z.array(z.string()).optional(),
+        title: z.string().min(1).max(255).optional(),
+        description: z.string().min(1).optional(),
+      });
+
+      const parsed = patchSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+      }
+
+      const updated = await storage.adminUpdateTicket(req.params.id, parsed.data, req.user!);
+      if (!updated) return res.status(404).json({ error: "Chamado não encontrado" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("Error updating ticket:", error);
+      res.status(500).json({ error: error.message || "Failed to update ticket" });
+    }
+  });
+
+  app.put("/api/tickets/:id/assignees", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({ assigneeIds: z.array(z.string()) });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos" });
+      }
+      await storage.adminSetAssignees(req.params.id, parsed.data.assigneeIds, req.user!);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error setting assignees:", error);
+      res.status(500).json({ error: error.message || "Failed to set assignees" });
+    }
+  });
+
+  app.get("/api/tickets/:id/comments", requireAuth, async (req, res) => {
+    try {
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+      const comments = await storage.listTicketComments(req.params.id, req.user!);
+      res.json(comments);
+    } catch (error) {
+      console.error("Error fetching comments:", error);
+      res.status(500).json({ error: "Failed to fetch comments" });
+    }
+  });
+
+  app.post("/api/tickets/:id/comments", requireAuth, async (req, res) => {
+    try {
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+
+      const commentSchema = z.object({
+        body: z.string().min(1),
+        isInternal: z.boolean().optional(),
+      });
+      const parsed = commentSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos" });
+      }
+
+      const comment = await storage.addTicketComment(req.params.id, req.user!, parsed.data);
+      res.status(201).json(comment);
+    } catch (error: any) {
+      console.error("Error adding comment:", error);
+      res.status(400).json({ error: error.message || "Failed to add comment" });
+    }
+  });
+
+  app.get("/api/tickets/:id/attachments", requireAuth, async (req, res) => {
+    try {
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+      const attachments = await storage.listTicketAttachments(req.params.id, req.user!);
+      res.json(attachments);
+    } catch (error) {
+      console.error("Error fetching attachments:", error);
+      res.status(500).json({ error: "Failed to fetch attachments" });
+    }
+  });
+
+  app.post("/api/tickets/:id/attachments", requireAuth, ticketUpload.single("file"), async (req, res) => {
+    try {
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+
+      if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado" });
+
+      const attachment = await storage.addTicketAttachment(req.params.id, req.user!, {
+        originalName: req.file.originalname,
+        storageName: req.file.filename,
+        mimeType: req.file.mimetype,
+        sizeBytes: req.file.size,
+      });
+      res.status(201).json(attachment);
+    } catch (error: any) {
+      console.error("Error uploading attachment:", error);
+      res.status(400).json({ error: error.message || "Failed to upload attachment" });
+    }
+  });
+
+  app.get("/api/tickets/:id/attachments/:attachmentId/download", requireAuth, async (req, res) => {
+    try {
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+
+      const attachments = await storage.listTicketAttachments(req.params.id, req.user!);
+      const attachment = attachments.find(a => a.id === req.params.attachmentId);
+      if (!attachment) return res.status(404).json({ error: "Anexo não encontrado" });
+
+      if (attachment.storageName.includes("..") || attachment.storageName.includes("/") || attachment.storageName.includes("\\")) {
+        return res.status(400).json({ error: "Invalid filename" });
+      }
+
+      const filePath = path.join(ticketUploadDir, attachment.storageName);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "Arquivo não encontrado" });
+      }
+
+      res.setHeader("Content-Disposition", `attachment; filename="${attachment.originalName}"`);
+      res.setHeader("Content-Type", attachment.mimeType);
+      res.sendFile(filePath);
+    } catch (error) {
+      console.error("Error downloading attachment:", error);
+      res.status(500).json({ error: "Failed to download attachment" });
+    }
+  });
+
+  // ==================== ADMIN TICKET ROUTES ====================
+
+  app.get("/api/admin/tickets/categories", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const categories = await storage.listAllTicketCategories();
+      res.json(categories);
+    } catch (error) {
+      console.error("Error fetching categories:", error);
+      res.status(500).json({ error: "Failed to fetch categories" });
+    }
+  });
+
+  app.post("/api/admin/tickets/categories", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        name: z.string().min(1).max(255),
+        branch: z.enum(["INFRA", "DEV", "SUPORTE"]),
+        parentId: z.string().nullable().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+      }
+
+      const cat = await storage.createTicketCategory({
+        ...parsed.data,
+        createdBy: req.user!.id,
+      });
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "ticket_category_create",
+        targetType: "ticket_category",
+        targetId: cat.id,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.status(201).json(cat);
+    } catch (error) {
+      console.error("Error creating category:", error);
+      res.status(500).json({ error: "Failed to create category" });
+    }
+  });
+
+  app.patch("/api/admin/tickets/categories/:id", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        name: z.string().min(1).max(255).optional(),
+        branch: z.enum(["INFRA", "DEV", "SUPORTE"]).optional(),
+        parentId: z.string().nullable().optional(),
+        isActive: z.boolean().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos" });
+      }
+
+      const updated = await storage.updateTicketCategory(req.params.id, parsed.data);
+      if (!updated) return res.status(404).json({ error: "Categoria não encontrada" });
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "ticket_category_update",
+        targetType: "ticket_category",
+        targetId: req.params.id,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating category:", error);
+      res.status(500).json({ error: "Failed to update category" });
+    }
+  });
+
+  app.delete("/api/admin/tickets/categories/:id", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      await storage.disableTicketCategory(req.params.id);
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "ticket_category_disable",
+        targetType: "ticket_category",
+        targetId: req.params.id,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error disabling category:", error);
+      res.status(500).json({ error: "Failed to disable category" });
+    }
+  });
+
+  app.get("/api/admin/tickets/sla-policies", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const policies = await storage.listSlaPolicies();
+      res.json(policies);
+    } catch (error) {
+      console.error("Error fetching SLA policies:", error);
+      res.status(500).json({ error: "Failed to fetch SLA policies" });
+    }
+  });
+
+  app.post("/api/admin/tickets/sla-policies", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        name: z.string().min(1).max(120),
+        priority: z.enum(["BAIXA", "MEDIA", "ALTA", "URGENTE"]),
+        firstResponseMinutes: z.number().int().positive(),
+        resolutionMinutes: z.number().int().positive(),
+        isActive: z.boolean().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+      }
+
+      const policy = await storage.createSlaPolicy(parsed.data);
+      res.status(201).json(policy);
+    } catch (error) {
+      console.error("Error creating SLA policy:", error);
+      res.status(500).json({ error: "Failed to create SLA policy" });
+    }
+  });
+
+  app.patch("/api/admin/tickets/sla-policies/:id", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        name: z.string().min(1).max(120).optional(),
+        priority: z.enum(["BAIXA", "MEDIA", "ALTA", "URGENTE"]).optional(),
+        firstResponseMinutes: z.number().int().positive().optional(),
+        resolutionMinutes: z.number().int().positive().optional(),
+        isActive: z.boolean().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos" });
+      }
+
+      const updated = await storage.updateSlaPolicy(req.params.id, parsed.data);
+      if (!updated) return res.status(404).json({ error: "Política SLA não encontrada" });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating SLA policy:", error);
+      res.status(500).json({ error: "Failed to update SLA policy" });
     }
   });
 

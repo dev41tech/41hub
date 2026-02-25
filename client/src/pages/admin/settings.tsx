@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Settings, KeyRound, Save, Eye, EyeOff, Check, X } from "lucide-react";
+import { ArrowLeft, Settings, KeyRound, Save, Eye, EyeOff, Check, X, Webhook, Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -27,10 +28,17 @@ const passwordRequirements: PasswordRequirement[] = [
   { label: "Um caractere especial (!@#$%^&*)", test: (p) => /[!@#$%^&*(),.?":{}|<>]/.test(p) },
 ];
 
+interface WebhookSettings {
+  url: string;
+  enabled: boolean;
+}
+
 export default function AdminSettings() {
   const { toast } = useToast();
   const [defaultPassword, setDefaultPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookEnabled, setWebhookEnabled] = useState(false);
 
   const allRequirementsMet = passwordRequirements.every((r) => r.test(defaultPassword));
 
@@ -38,11 +46,27 @@ export default function AdminSettings() {
     queryKey: ["/api/admin/settings"],
   });
 
+  const { data: webhookSettings, isLoading: webhookLoading } = useQuery<WebhookSettings>({
+    queryKey: ["/api/admin/settings/webhooks"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/settings/webhooks", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+
   useEffect(() => {
     if (settings?.DEFAULT_LOCAL_PASSWORD) {
       setDefaultPassword(settings.DEFAULT_LOCAL_PASSWORD);
     }
   }, [settings]);
+
+  useEffect(() => {
+    if (webhookSettings) {
+      setWebhookUrl(webhookSettings.url);
+      setWebhookEnabled(webhookSettings.enabled);
+    }
+  }, [webhookSettings]);
 
   const updateMutation = useMutation({
     mutationFn: async (data: { key: string; value: string }) => {
@@ -54,6 +78,19 @@ export default function AdminSettings() {
     },
     onError: () => {
       toast({ title: "Erro ao salvar configuração", variant: "destructive" });
+    },
+  });
+
+  const webhookMutation = useMutation({
+    mutationFn: async (data: WebhookSettings) => {
+      return apiRequest("PUT", "/api/admin/settings/webhooks", data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/settings/webhooks"] });
+      toast({ title: "Configurações de webhook salvas" });
+    },
+    onError: () => {
+      toast({ title: "Erro ao salvar webhooks", variant: "destructive" });
     },
   });
 
@@ -153,6 +190,62 @@ export default function AdminSettings() {
                   Salvar
                 </Button>
               </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base font-medium">
+            <Webhook className="h-4 w-4" />
+            Integrações — Webhooks
+          </CardTitle>
+          <CardDescription>
+            Configure webhooks para integrar com ferramentas externas (n8n, Zapier, etc).
+            Eventos de tickets serão enviados via POST para a URL configurada.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {webhookLoading ? (
+            <Skeleton className="h-10 w-full" />
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="webhookEnabled">Webhooks habilitados</Label>
+                <Switch
+                  id="webhookEnabled"
+                  checked={webhookEnabled}
+                  onCheckedChange={setWebhookEnabled}
+                  data-testid="switch-webhook-enabled"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="webhookUrl">URL do Webhook</Label>
+                <Input
+                  id="webhookUrl"
+                  type="url"
+                  value={webhookUrl}
+                  onChange={(e) => setWebhookUrl(e.target.value)}
+                  placeholder="https://seu-servidor.com/webhook"
+                  data-testid="input-webhook-url"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Eventos: ticket_created, ticket_approved, ticket_rejected, ticket_status_changed, ticket_commented, ticket_resolved
+                </p>
+              </div>
+              <Button
+                onClick={() => webhookMutation.mutate({ url: webhookUrl, enabled: webhookEnabled })}
+                disabled={webhookMutation.isPending}
+                data-testid="button-save-webhooks"
+              >
+                {webhookMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                ) : (
+                  <Save className="h-4 w-4 mr-2" />
+                )}
+                Salvar Webhooks
+              </Button>
             </div>
           )}
         </CardContent>

@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
 import {
   Select,
   SelectContent,
@@ -89,9 +91,22 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
 
   const [kbTags, setKbTags] = useState("");
   const [autoAwaitOnMissing, setAutoAwaitOnMissing] = useState(false);
+  const [requiresApproval, setRequiresApproval] = useState(false);
+  const [approvalMode, setApprovalMode] = useState("REQUESTER_COORDINATOR");
+  const [approvalUserIds, setApprovalUserIds] = useState<string[]>([]);
 
   const { data: categories = [], isLoading } = useQuery<TicketCategory[]>({
     queryKey: ["/api/admin/tickets/categories"],
+  });
+
+  const { data: adminUsers = [] } = useQuery<Array<{ id: string; name: string; email: string }>>({
+    queryKey: ["/api/users/directory", "admins"],
+    queryFn: async () => {
+      const res = await fetch("/api/users/directory?all=true", { credentials: "include" });
+      if (!res.ok) return [];
+      const all = await res.json();
+      return all.filter((u: any) => u.isAdmin || u.roles?.some((r: any) => r.roleName === "Admin"));
+    },
   });
 
   const roots = categories.filter(c => !c.parentId);
@@ -115,6 +130,9 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
           payload.checklistTemplate = checklistTemplate.length > 0 ? checklistTemplate : null;
           payload.kbTags = kbTags.trim() ? kbTags.split(",").map(t => t.trim()).filter(Boolean) : null;
           payload.autoAwaitOnMissing = autoAwaitOnMissing;
+          payload.requiresApproval = requiresApproval;
+          payload.approvalMode = approvalMode;
+          payload.approvalUserIds = approvalMode === "SPECIFIC_USERS" ? approvalUserIds : [];
         }
         return (await apiRequest("PATCH", `/api/admin/tickets/categories/${editing.id}`, payload)).json();
       }
@@ -173,6 +191,9 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
     setNewCheckKey(""); setNewCheckLabel("");
     setKbTags("");
     setAutoAwaitOnMissing(false);
+    setRequiresApproval(false);
+    setApprovalMode("REQUESTER_COORDINATOR");
+    setApprovalUserIds([]);
   }
 
   function resetFieldForm() {
@@ -212,6 +233,9 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
     const tags = (cat as any).kbTags;
     setKbTags(tags && Array.isArray(tags) ? tags.join(", ") : "");
     setAutoAwaitOnMissing((cat as any).autoAwaitOnMissing || false);
+    setRequiresApproval((cat as any).requiresApproval || false);
+    setApprovalMode((cat as any).approvalMode || "REQUESTER_COORDINATOR");
+    setApprovalUserIds((cat as any).approvalUserIds || []);
     setShowAddField(false);
     setShowAddAttachment(false);
     setShowAddChecklist(false);
@@ -550,6 +574,54 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
                 <div className="flex items-center gap-2">
                   <Switch checked={autoAwaitOnMissing} onCheckedChange={setAutoAwaitOnMissing} data-testid="switch-auto-await" />
                   <Label className="text-sm">Habilitar botão "Pedir infos" (quando faltar dados/anexos)</Label>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Switch checked={requiresApproval} onCheckedChange={setRequiresApproval} data-testid="switch-requires-approval" />
+                    <Label className="text-sm">Exigir aprovação antes do atendimento</Label>
+                  </div>
+
+                  {requiresApproval && (
+                    <div className="space-y-3 pl-2 border-l-2 border-purple-200 dark:border-purple-800">
+                      <div className="space-y-2">
+                        <Label className="text-xs">Modo de aprovação</Label>
+                        <Select value={approvalMode} onValueChange={setApprovalMode}>
+                          <SelectTrigger data-testid="select-approval-mode">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="REQUESTER_COORDINATOR">Coordenador do setor do solicitante</SelectItem>
+                            <SelectItem value="TI_ADMIN">Admin do setor de destino (TI)</SelectItem>
+                            <SelectItem value="SPECIFIC_USERS">Usuários específicos</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {approvalMode === "SPECIFIC_USERS" && (
+                        <div className="space-y-2">
+                          <Label className="text-xs">Aprovadores</Label>
+                          <div className="max-h-32 overflow-y-auto space-y-1 border rounded-lg p-2">
+                            {adminUsers.map((u) => (
+                              <label key={u.id} className="flex items-center gap-2 text-sm cursor-pointer py-0.5">
+                                <Checkbox
+                                  checked={approvalUserIds.includes(u.id)}
+                                  onCheckedChange={(checked) => {
+                                    setApprovalUserIds(prev =>
+                                      checked ? [...prev, u.id] : prev.filter(id => id !== u.id)
+                                    );
+                                  }}
+                                />
+                                <span className="truncate">{u.name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </TabsContent>
 

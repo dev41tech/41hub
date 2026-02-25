@@ -24,6 +24,7 @@ const statusLabels: Record<string, string> = {
   ABERTO: "Aberto",
   EM_ANDAMENTO: "Em Andamento",
   AGUARDANDO_USUARIO: "Aguardando Usuário",
+  AGUARDANDO_APROVACAO: "Aguardando Aprovação",
   RESOLVIDO: "Resolvido",
   CANCELADO: "Cancelado",
 };
@@ -47,6 +48,7 @@ const statusColors: Record<string, string> = {
   EM_ANDAMENTO: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
   AGUARDANDO_USUARIO: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
   RESOLVIDO: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
+  AGUARDANDO_APROVACAO: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
   CANCELADO: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200",
 };
 

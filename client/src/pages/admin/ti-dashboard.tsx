@@ -72,6 +72,7 @@ const statusLabels: Record<string, string> = {
   ABERTO: "Aberto",
   EM_ANDAMENTO: "Em andamento",
   AGUARDANDO_USUARIO: "Aguardando",
+  AGUARDANDO_APROVACAO: "Aprovação",
   RESOLVIDO: "Resolvido",
   CANCELADO: "Cancelado",
 };
@@ -323,6 +324,7 @@ export default function TiDashboard() {
                         <SelectItem value="ABERTO">Aberto</SelectItem>
                         <SelectItem value="EM_ANDAMENTO">Em andamento</SelectItem>
                         <SelectItem value="AGUARDANDO_USUARIO">Aguardando</SelectItem>
+                        <SelectItem value="AGUARDANDO_APROVACAO">Aprovação</SelectItem>
                       </SelectContent>
                     </Select>
                     <Select value={slaFilter} onValueChange={setSlaFilter}>

@@ -11,6 +11,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { pool } from "./db";
 import type { UserWithRoles } from "@shared/schema";
+import { emitEvent } from "./lib/webhooks";
 
 const SALT_ROUNDS = 12;
 const DEFAULT_PASSWORD = "41Tech@2026";
@@ -1310,6 +1311,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         console.error("Error dispatching ticket_created notification:", notifErr);
       }
 
+      emitEvent("ticket_created", {
+        ticketId: ticket.id,
+        number: ticket.number,
+        title: parsed.data.title,
+        categoryId: parsed.data.categoryId,
+        priority: ticket.priority,
+        createdBy: req.user!.id,
+        status: ticket.status,
+      });
+
       res.status(201).json(ticket);
     } catch (error: any) {
       console.error("Error creating ticket:", error);
@@ -1331,7 +1342,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/tickets/:id", requireAuth, requireAdmin, async (req, res) => {
     try {
       const patchSchema = z.object({
-        status: z.enum(["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO", "RESOLVIDO", "CANCELADO"]).optional(),
+        status: z.enum(["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO", "AGUARDANDO_APROVACAO", "RESOLVIDO", "CANCELADO"]).optional(),
         priority: z.enum(["BAIXA", "MEDIA", "ALTA", "URGENTE"]).optional(),
         categoryId: z.string().optional(),
         relatedResourceId: z.string().nullable().optional(),
@@ -1366,7 +1377,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (enabled) {
             const statusLabels: Record<string, string> = {
               ABERTO: "Aberto", EM_ANDAMENTO: "Em andamento",
-              AGUARDANDO_USUARIO: "Aguardando usuário", RESOLVIDO: "Resolvido", CANCELADO: "Cancelado"
+              AGUARDANDO_USUARIO: "Aguardando usuário", AGUARDANDO_APROVACAO: "Aguardando aprovação",
+              RESOLVIDO: "Resolvido", CANCELADO: "Cancelado"
             };
             const assignees = await storage.getTicketAssigneeIds(req.params.id);
             const recipients = [updated.createdBy, ...assignees].filter(
@@ -1386,9 +1398,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
+      if (ticketPatch.status) {
+        emitEvent("ticket_status_changed", {
+          ticketId: updated.id,
+          number: updated.number,
+          oldStatus: req.body._oldStatus,
+          newStatus: ticketPatch.status,
+          actorUserId: req.user!.id,
+        });
+        if (ticketPatch.status === "RESOLVIDO") {
+          emitEvent("ticket_resolved", {
+            ticketId: updated.id,
+            number: updated.number,
+            actorUserId: req.user!.id,
+          });
+        }
+      }
+
       res.json(updated);
     } catch (error: any) {
       console.error("Error updating ticket:", error);
+      if (error.message === "APPROVAL_REQUIRED") {
+        return res.status(409).json({ error: "Este chamado requer aprovação antes de mudar de status" });
+      }
       res.status(500).json({ error: error.message || "Failed to update ticket" });
     }
   });
@@ -1470,6 +1502,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       } catch (notifErr) {
         console.error("Error dispatching ticket_comment notification:", notifErr);
+      }
+
+      if (!parsed.data.isInternal) {
+        emitEvent("ticket_commented", {
+          ticketId: ticket.id,
+          number: ticket.number,
+          commentId: comment.id,
+          actorUserId: req.user!.id,
+        });
       }
 
       res.status(201).json(comment);
@@ -1624,6 +1665,248 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ==================== TICKET APPROVAL ROUTES ====================
+
+  app.get("/api/tickets/:id/approval", requireAuth, async (req, res) => {
+    try {
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+
+      const allCats = await storage.listAllTicketCategories();
+      const category = allCats.find(c => c.id === ticket.categoryId);
+
+      const cycles = await pool.query(
+        `SELECT MAX(cycle_number) as max_cycle FROM ticket_sla_cycles WHERE ticket_id = $1`,
+        [req.params.id]
+      );
+      const cycleNumber = cycles.rows[0]?.max_cycle || 1;
+      const approval = await storage.getTicketApproval(req.params.id, cycleNumber);
+
+      let approverIds: string[] = [];
+      if (category && ticket.status === "AGUARDANDO_APROVACAO") {
+        approverIds = await storage.resolveApprovers(ticket as any, category);
+      }
+
+      const isApprover = req.user!.isAdmin || approverIds.includes(req.user!.id);
+
+      res.json({
+        approval: approval || null,
+        isApprover,
+        approverIds,
+      });
+    } catch (error) {
+      console.error("Error fetching approval:", error);
+      res.status(500).json({ error: "Failed to fetch approval" });
+    }
+  });
+
+  app.post("/api/tickets/:id/approve", requireAuth, async (req, res) => {
+    try {
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+      if (ticket.status !== "AGUARDANDO_APROVACAO") {
+        return res.status(400).json({ error: "Chamado não está aguardando aprovação" });
+      }
+
+      const allCats = await storage.listAllTicketCategories();
+      const category = allCats.find(c => c.id === ticket.categoryId);
+      if (!category) return res.status(400).json({ error: "Categoria não encontrada" });
+
+      const approverIds = await storage.resolveApprovers(ticket as any, category);
+      if (!req.user!.isAdmin && !approverIds.includes(req.user!.id)) {
+        return res.status(403).json({ error: "Você não tem permissão para aprovar este chamado" });
+      }
+
+      const noteSchema = z.object({ note: z.string().optional() });
+      const parsed = noteSchema.safeParse(req.body);
+      const note = parsed.success ? parsed.data.note || "" : "";
+
+      const cycles = await pool.query(
+        `SELECT MAX(cycle_number) as max_cycle FROM ticket_sla_cycles WHERE ticket_id = $1`,
+        [req.params.id]
+      );
+      const cycleNumber = cycles.rows[0]?.max_cycle || 1;
+
+      await pool.query(
+        `UPDATE ticket_approvals SET status = 'APPROVED', approver_user_id = $1, decision_note = $2, decided_at = NOW()
+         WHERE ticket_id = $3 AND cycle_number = $4`,
+        [req.user!.id, note, req.params.id, cycleNumber]
+      );
+
+      await storage.adminUpdateTicket(req.params.id, { status: "ABERTO" }, req.user!);
+
+      await pool.query(
+        `INSERT INTO ticket_events (id, ticket_id, actor_user_id, type, data, created_at)
+         VALUES (gen_random_uuid(), $1, $2, 'approved', $3, NOW())`,
+        [req.params.id, req.user!.id, JSON.stringify({ note, cycleNumber })]
+      );
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "ticket_approve",
+        entityType: "ticket",
+        entityId: req.params.id,
+        details: { note, cycleNumber },
+      });
+
+      try {
+        const enabled = await storage.isNotificationEnabled("ticket_status");
+        if (enabled) {
+          const recipients = [ticket.createdBy].filter(id => id !== req.user!.id);
+          if (recipients.length > 0) {
+            await storage.createNotifications(recipients, {
+              type: "ticket_status",
+              title: "Chamado aprovado",
+              message: `Chamado #${ticket.number} foi aprovado por ${req.user!.name}`,
+              linkUrl: `/tickets/${ticket.id}`,
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.error("Error dispatching approval notification:", notifErr);
+      }
+
+      emitEvent("ticket_approved", {
+        ticketId: ticket.id,
+        number: ticket.number,
+        approverUserId: req.user!.id,
+        note,
+      });
+
+      res.json({ message: "Chamado aprovado com sucesso" });
+    } catch (error: any) {
+      console.error("Error approving ticket:", error);
+      res.status(500).json({ error: error.message || "Failed to approve ticket" });
+    }
+  });
+
+  app.post("/api/tickets/:id/reject", requireAuth, async (req, res) => {
+    try {
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+      if (ticket.status !== "AGUARDANDO_APROVACAO") {
+        return res.status(400).json({ error: "Chamado não está aguardando aprovação" });
+      }
+
+      const allCats = await storage.listAllTicketCategories();
+      const category = allCats.find(c => c.id === ticket.categoryId);
+      if (!category) return res.status(400).json({ error: "Categoria não encontrada" });
+
+      const approverIds = await storage.resolveApprovers(ticket as any, category);
+      if (!req.user!.isAdmin && !approverIds.includes(req.user!.id)) {
+        return res.status(403).json({ error: "Você não tem permissão para rejeitar este chamado" });
+      }
+
+      const noteSchema = z.object({ note: z.string().min(1, "Motivo da rejeição é obrigatório") });
+      const parsed = noteSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Motivo da rejeição é obrigatório" });
+      }
+
+      const cycles = await pool.query(
+        `SELECT MAX(cycle_number) as max_cycle FROM ticket_sla_cycles WHERE ticket_id = $1`,
+        [req.params.id]
+      );
+      const cycleNumber = cycles.rows[0]?.max_cycle || 1;
+
+      await pool.query(
+        `UPDATE ticket_approvals SET status = 'REJECTED', approver_user_id = $1, decision_note = $2, decided_at = NOW()
+         WHERE ticket_id = $3 AND cycle_number = $4`,
+        [req.user!.id, parsed.data.note, req.params.id, cycleNumber]
+      );
+
+      await storage.adminUpdateTicket(req.params.id, { status: "CANCELADO" }, req.user!);
+
+      await pool.query(
+        `INSERT INTO ticket_events (id, ticket_id, actor_user_id, type, data, created_at)
+         VALUES (gen_random_uuid(), $1, $2, 'rejected', $3, NOW())`,
+        [req.params.id, req.user!.id, JSON.stringify({ note: parsed.data.note, cycleNumber })]
+      );
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "ticket_reject",
+        entityType: "ticket",
+        entityId: req.params.id,
+        details: { note: parsed.data.note, cycleNumber },
+      });
+
+      try {
+        const enabled = await storage.isNotificationEnabled("ticket_status");
+        if (enabled) {
+          const recipients = [ticket.createdBy].filter(id => id !== req.user!.id);
+          if (recipients.length > 0) {
+            await storage.createNotifications(recipients, {
+              type: "ticket_status",
+              title: "Chamado rejeitado",
+              message: `Chamado #${ticket.number} foi rejeitado: ${parsed.data.note}`,
+              linkUrl: `/tickets/${ticket.id}`,
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.error("Error dispatching rejection notification:", notifErr);
+      }
+
+      emitEvent("ticket_rejected", {
+        ticketId: ticket.id,
+        number: ticket.number,
+        rejectorUserId: req.user!.id,
+        note: parsed.data.note,
+      });
+
+      res.json({ message: "Chamado rejeitado" });
+    } catch (error: any) {
+      console.error("Error rejecting ticket:", error);
+      res.status(500).json({ error: error.message || "Failed to reject ticket" });
+    }
+  });
+
+  // ==================== WEBHOOK SETTINGS ROUTES ====================
+
+  app.get("/api/admin/settings/webhooks", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const urlSetting = await storage.getSetting("WEBHOOK_EVENTS_URL");
+      const enabledSetting = await storage.getSetting("WEBHOOK_EVENTS_ENABLED");
+      const url = urlSetting?.value;
+      const enabled = enabledSetting?.value;
+      res.json({
+        url: url || "",
+        enabled: enabled === "true",
+      });
+    } catch (error) {
+      console.error("Error fetching webhook settings:", error);
+      res.status(500).json({ error: "Failed to fetch webhook settings" });
+    }
+  });
+
+  app.put("/api/admin/settings/webhooks", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        url: z.string(),
+        enabled: z.boolean(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Dados inválidos" });
+
+      await storage.setSetting("WEBHOOK_EVENTS_URL", parsed.data.url);
+      await storage.setSetting("WEBHOOK_EVENTS_ENABLED", parsed.data.enabled ? "true" : "false");
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "webhook_settings_update",
+        entityType: "settings",
+        entityId: "webhooks",
+        details: { url: parsed.data.url, enabled: parsed.data.enabled },
+      });
+
+      res.json({ message: "Configurações de webhook atualizadas" });
+    } catch (error) {
+      console.error("Error updating webhook settings:", error);
+      res.status(500).json({ error: "Failed to update webhook settings" });
+    }
+  });
+
   // ==================== ADMIN TICKET ROUTES ====================
 
   app.get("/api/admin/tickets/categories", requireAuth, requireAdmin, async (req, res) => {
@@ -1714,6 +1997,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         })).nullable().optional(),
         kbTags: z.array(z.string()).nullable().optional(),
         autoAwaitOnMissing: z.boolean().optional(),
+        requiresApproval: z.boolean().optional(),
+        approvalMode: z.enum(["REQUESTER_COORDINATOR", "TI_ADMIN", "SPECIFIC_USERS"]).optional(),
+        approvalUserIds: z.array(z.string()).optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) {

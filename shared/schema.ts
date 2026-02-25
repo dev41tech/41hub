@@ -11,9 +11,9 @@ export const openBehaviorEnum = pgEnum("open_behavior", ["HUB_ONLY", "NEW_TAB_ON
 export const overrideEffectEnum = pgEnum("override_effect", ["ALLOW", "DENY"]);
 export const healthStatusEnum = pgEnum("health_status", ["UP", "DEGRADED", "DOWN"]);
 export const authProviderEnum = pgEnum("auth_provider", ["entra", "local"]);
-export const ticketStatusEnum = pgEnum("ticket_status", ["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO", "RESOLVIDO", "CANCELADO"]);
+export const ticketStatusEnum = pgEnum("ticket_status", ["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO", "AGUARDANDO_APROVACAO", "RESOLVIDO", "CANCELADO"]);
 export const ticketPriorityEnum = pgEnum("ticket_priority", ["BAIXA", "MEDIA", "ALTA", "URGENTE"]);
-export const ticketEventTypeEnum = pgEnum("ticket_event_type", ["ticket_created", "status_changed", "assignees_changed", "comment_added", "attachment_added", "resolved", "reopened", "priority_changed", "category_changed"]);
+export const ticketEventTypeEnum = pgEnum("ticket_event_type", ["ticket_created", "status_changed", "assignees_changed", "comment_added", "attachment_added", "resolved", "reopened", "priority_changed", "category_changed", "approved", "rejected"]);
 export const notificationTypeEnum = pgEnum("notification_type", ["ticket_created", "ticket_comment", "ticket_status", "resource_updated"]);
 
 // Users table
@@ -144,6 +144,9 @@ export const ticketCategories = pgTable("ticket_categories", {
   checklistTemplate: jsonb("checklist_template").$type<Array<{ key: string; label: string }>>().default([]),
   kbTags: text("kb_tags").array().default(sql`ARRAY[]::text[]`),
   autoAwaitOnMissing: boolean("auto_await_on_missing").notNull().default(false),
+  requiresApproval: boolean("requires_approval").notNull().default(false),
+  approvalMode: varchar("approval_mode", { length: 32 }).notNull().default("REQUESTER_COORDINATOR"),
+  approvalUserIds: text("approval_user_ids").array().default(sql`ARRAY[]::text[]`),
   createdBy: varchar("created_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
@@ -257,6 +260,33 @@ export const ticketEvents = pgTable("ticket_events", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+// Ticket approvals
+export const ticketApprovals = pgTable("ticket_approvals", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id", { length: 36 }).notNull().references(() => tickets.id, { onDelete: "cascade" }),
+  cycleNumber: integer("cycle_number").notNull(),
+  requestedBy: varchar("requested_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  requesterSectorId: varchar("requester_sector_id", { length: 36 }).references(() => sectors.id, { onDelete: "set null" }),
+  status: varchar("status", { length: 16 }).notNull().default("PENDING"),
+  approverUserId: varchar("approver_user_id", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  decisionNote: text("decision_note"),
+  requestedAt: timestamp("requested_at").notNull().defaultNow(),
+  decidedAt: timestamp("decided_at"),
+}, (t) => [
+  unique().on(t.ticketId, t.cycleNumber),
+]);
+
+// Ticket SLA alert dedup
+export const ticketAlertsDedup = pgTable("ticket_alerts_dedup", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id", { length: 36 }).notNull().references(() => tickets.id, { onDelete: "cascade" }),
+  cycleNumber: integer("cycle_number").notNull(),
+  alertType: varchar("alert_type", { length: 24 }).notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  unique().on(t.ticketId, t.cycleNumber, t.alertType),
+]);
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -346,6 +376,12 @@ export const insertTicketSchema = createInsertSchema(tickets).omit({
   closedAt: true,
 });
 
+export const insertTicketApprovalSchema = createInsertSchema(ticketApprovals).omit({
+  id: true,
+  requestedAt: true,
+  decidedAt: true,
+});
+
 export const insertTicketCommentSchema = createInsertSchema(ticketComments).omit({
   id: true,
   createdAt: true,
@@ -403,6 +439,11 @@ export type TicketChecklistItem = typeof ticketChecklistItems.$inferSelect;
 export type TicketSlaCycle = typeof ticketSlaCycles.$inferSelect;
 
 export type TicketEvent = typeof ticketEvents.$inferSelect;
+
+export type TicketApproval = typeof ticketApprovals.$inferSelect;
+export type InsertTicketApproval = z.infer<typeof insertTicketApprovalSchema>;
+
+export type TicketAlertDedup = typeof ticketAlertsDedup.$inferSelect;
 
 export type NotificationSetting = typeof notificationSettings.$inferSelect;
 export type InsertNotificationSetting = z.infer<typeof insertNotificationSettingSchema>;

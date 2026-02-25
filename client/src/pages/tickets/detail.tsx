@@ -39,6 +39,8 @@ import {
   AlertTriangle,
   CheckSquare,
   HelpCircle,
+  ShieldCheck,
+  XCircle,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -54,6 +56,7 @@ const statusLabels: Record<string, string> = {
   ABERTO: "Aberto",
   EM_ANDAMENTO: "Em Andamento",
   AGUARDANDO_USUARIO: "Aguardando Usuário",
+  AGUARDANDO_APROVACAO: "Aguardando Aprovação",
   RESOLVIDO: "Resolvido",
   CANCELADO: "Cancelado",
 };
@@ -77,6 +80,7 @@ const statusColors: Record<string, string> = {
   EM_ANDAMENTO: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
   AGUARDANDO_USUARIO: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
   RESOLVIDO: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200",
+  AGUARDANDO_APROVACAO: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
   CANCELADO: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200",
 };
 
@@ -312,6 +316,38 @@ export default function TicketsDetail() {
       queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId] });
       queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId, "comments"] });
       toast({ title: data.message || "Informações solicitadas" });
+    },
+    onError: (e: any) => {
+      toast({ title: "Erro", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const [approvalDialogOpen, setApprovalDialogOpen] = useState(false);
+  const [approvalAction, setApprovalAction] = useState<"approve" | "reject">("approve");
+  const [approvalNote, setApprovalNote] = useState("");
+
+  const { data: approvalData } = useQuery<{ approval: any; isApprover: boolean; approverIds: string[] }>({
+    queryKey: ["/api/tickets", ticketId, "approval"],
+    queryFn: async () => {
+      const res = await fetch(`/api/tickets/${ticketId}/approval`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!ticketId,
+  });
+
+  const approvalMutation = useMutation({
+    mutationFn: async ({ action, note }: { action: "approve" | "reject"; note: string }) => {
+      const endpoint = action === "approve" ? "approve" : "reject";
+      const res = await apiRequest("POST", `/api/tickets/${ticketId}/${endpoint}`, { note });
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId, "approval"] });
+      setApprovalDialogOpen(false);
+      setApprovalNote("");
+      toast({ title: data.message || "Decisão registrada" });
     },
     onError: (e: any) => {
       toast({ title: "Erro", description: e.message, variant: "destructive" });
@@ -616,6 +652,95 @@ export default function TicketsDetail() {
             </Card>
           )}
 
+          {ticket.status === "AGUARDANDO_APROVACAO" && (
+            <Card className="border-purple-300 dark:border-purple-700">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-purple-600" />
+                  Aprovação Pendente
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {approvalData?.isApprover ? (
+                  <div className="space-y-2">
+                    <p className="text-sm text-muted-foreground">
+                      Este chamado requer sua aprovação antes de prosseguir.
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                        onClick={() => {
+                          setApprovalAction("approve");
+                          setApprovalNote("");
+                          setApprovalDialogOpen(true);
+                        }}
+                        data-testid="button-approve-ticket"
+                      >
+                        <ShieldCheck className="h-4 w-4 mr-1" />
+                        Aprovar
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        className="flex-1"
+                        onClick={() => {
+                          setApprovalAction("reject");
+                          setApprovalNote("");
+                          setApprovalDialogOpen(true);
+                        }}
+                        data-testid="button-reject-ticket"
+                      >
+                        <XCircle className="h-4 w-4 mr-1" />
+                        Rejeitar
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Aguardando aprovador. SLA pausado.
+                  </p>
+                )}
+                {approvalData?.approval?.status === "PENDING" && (
+                  <Badge variant="secondary" className="bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200" data-testid="badge-approval-pending">
+                    Pendente
+                  </Badge>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {(approvalData?.approval?.status === "APPROVED" || approvalData?.approval?.status === "REJECTED") && ticket.status !== "AGUARDANDO_APROVACAO" && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4" />
+                  Resultado da Aprovação
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <Badge
+                  variant="secondary"
+                  className={approvalData.approval.status === "APPROVED"
+                    ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+                    : "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+                  }
+                  data-testid="badge-approval-result"
+                >
+                  {approvalData.approval.status === "APPROVED" ? "Aprovado" : "Rejeitado"}
+                </Badge>
+                {approvalData.approval.decisionNote && (
+                  <p className="text-muted-foreground">{approvalData.approval.decisionNote}</p>
+                )}
+                {approvalData.approval.decidedAt && (
+                  <p className="text-xs text-muted-foreground">
+                    {formatDate(approvalData.approval.decidedAt)}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Detalhes</CardTitle>
@@ -686,6 +811,7 @@ export default function TicketsDetail() {
                       <SelectItem value="ABERTO">Aberto</SelectItem>
                       <SelectItem value="EM_ANDAMENTO">Em Andamento</SelectItem>
                       <SelectItem value="AGUARDANDO_USUARIO">Aguardando Usuário</SelectItem>
+                      <SelectItem value="AGUARDANDO_APROVACAO">Aguardando Aprovação</SelectItem>
                       <SelectItem value="RESOLVIDO">Resolvido</SelectItem>
                       <SelectItem value="CANCELADO">Cancelado</SelectItem>
                     </SelectContent>
@@ -768,6 +894,42 @@ export default function TicketsDetail() {
           )}
         </div>
       </div>
+
+      <Dialog open={approvalDialogOpen} onOpenChange={setApprovalDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {approvalAction === "approve" ? "Aprovar Chamado" : "Rejeitar Chamado"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>{approvalAction === "approve" ? "Observação (opcional)" : "Motivo da rejeição"}</Label>
+              <Textarea
+                value={approvalNote}
+                onChange={(e) => setApprovalNote(e.target.value)}
+                placeholder={approvalAction === "approve" ? "Observação sobre a aprovação..." : "Informe o motivo da rejeição..."}
+                rows={3}
+                data-testid="input-approval-note"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApprovalDialogOpen(false)}>Cancelar</Button>
+            <Button
+              onClick={() => approvalMutation.mutate({ action: approvalAction, note: approvalNote })}
+              disabled={approvalMutation.isPending || (approvalAction === "reject" && !approvalNote.trim())}
+              className={approvalAction === "approve" ? "bg-green-600 hover:bg-green-700" : ""}
+              variant={approvalAction === "reject" ? "destructive" : "default"}
+              data-testid="button-confirm-approval"
+            >
+              {approvalMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : approvalAction === "approve" ? "Confirmar Aprovação" : "Confirmar Rejeição"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={deadlineDialogOpen} onOpenChange={setDeadlineDialogOpen}>
         <DialogContent>

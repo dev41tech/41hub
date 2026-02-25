@@ -62,6 +62,9 @@ import {
   type KbArticleFeedback as KbArticleFeedbackType,
   ticketChecklistItems,
   type TicketChecklistItem,
+  ticketApprovals,
+  type TicketApproval,
+  ticketAlertsDedup,
   typingTexts,
   typingSessions,
   typingScores,
@@ -249,6 +252,10 @@ export interface IStorage {
 
   // Notification helpers
   getTicketAssigneeIds(ticketId: string): Promise<string[]>;
+
+  // Approvals
+  getTicketApproval(ticketId: string, cycleNumber: number): Promise<TicketApproval | undefined>;
+  resolveApprovers(ticket: Ticket, category: TicketCategory): Promise<string[]>;
 
   // Knowledge Base
   listKbArticles(filters: { categoryId?: string; q?: string; tags?: string[]; publishedOnly?: boolean }): Promise<(KbArticle & { categoryName?: string; authorName?: string; viewCount?: number; helpfulCount?: number; notHelpfulCount?: number })[]>;
@@ -982,10 +989,15 @@ export class DatabaseStorage implements IStorage {
 
     const priority = data.priority || "MEDIA";
 
+    const allCatsForApproval = await this.listAllTicketCategories();
+    const catForApproval = allCatsForApproval.find(c => c.id === data.categoryId);
+    const needsApproval = (catForApproval as any)?.requiresApproval === true;
+    const initialStatus = needsApproval ? "AGUARDANDO_APROVACAO" : "ABERTO";
+
     const [ticket] = await db.insert(tickets).values({
       title: data.title,
       description: data.description,
-      status: "ABERTO",
+      status: initialStatus as any,
       priority,
       requesterSectorId: data.requesterSectorId,
       targetSectorId: targetSector.id,
@@ -1004,13 +1016,24 @@ export class DatabaseStorage implements IStorage {
       openedAt: now,
       firstResponseDueAt: dueDates.firstResponseDueAt,
       resolutionDueAt: dueDates.resolutionDueAt,
+      ...(needsApproval ? { pausedAt: now } : {}),
     });
+
+    if (needsApproval) {
+      await db.insert(ticketApprovals).values({
+        ticketId: ticket.id,
+        cycleNumber: 1,
+        requestedBy: actorUser.id,
+        requesterSectorId: data.requesterSectorId,
+        status: "PENDING",
+      });
+    }
 
     await db.insert(ticketEvents).values({
       ticketId: ticket.id,
       actorUserId: actorUser.id,
       type: "ticket_created",
-      data: { priority, categoryId: data.categoryId },
+      data: { priority, categoryId: data.categoryId, needsApproval },
     });
 
     await this.createAuditLog({
@@ -1109,7 +1132,7 @@ export class DatabaseStorage implements IStorage {
     } else if (filters.includeClosed) {
       conditions.push(inArray(tickets.status, ["RESOLVIDO", "CANCELADO"]));
     } else {
-      conditions.push(inArray(tickets.status, ["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO"]));
+      conditions.push(inArray(tickets.status, ["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO", "AGUARDANDO_APROVACAO"]));
     }
 
     if (filters.q) {
@@ -1173,6 +1196,17 @@ export class DatabaseStorage implements IStorage {
     if (patch.status !== undefined) updateData.status = patch.status;
 
     if (patch.status && patch.status !== existing.status) {
+      if (existing.status === "AGUARDANDO_APROVACAO" && patch.status !== "CANCELADO" && patch.status !== "AGUARDANDO_APROVACAO") {
+        const [cycle] = await db.select().from(ticketSlaCycles)
+          .where(eq(ticketSlaCycles.ticketId, ticketId))
+          .orderBy(desc(ticketSlaCycles.cycleNumber))
+          .limit(1);
+        const approval = cycle ? await this.getTicketApproval(ticketId, cycle.cycleNumber) : null;
+        if (!approval || approval.status !== "APPROVED") {
+          throw new Error("APPROVAL_REQUIRED");
+        }
+      }
+
       if (existing.status === "ABERTO" && patch.status !== "ABERTO") {
         const [cycle] = await db.select().from(ticketSlaCycles)
           .where(eq(ticketSlaCycles.ticketId, ticketId))
@@ -1238,11 +1272,12 @@ export class DatabaseStorage implements IStorage {
         .limit(1);
 
       if (slaCycle) {
-        if (patch.status === "AGUARDANDO_USUARIO" && !slaCycle.pausedAt) {
+        const pauseStatuses = ["AGUARDANDO_USUARIO", "AGUARDANDO_APROVACAO"];
+        if (pauseStatuses.includes(patch.status!) && !slaCycle.pausedAt) {
           await db.update(ticketSlaCycles).set({
             pausedAt: new Date(),
           }).where(eq(ticketSlaCycles.id, slaCycle.id));
-        } else if (existing.status === "AGUARDANDO_USUARIO" && patch.status !== "AGUARDANDO_USUARIO" && slaCycle.pausedAt) {
+        } else if (pauseStatuses.includes(existing.status) && !pauseStatuses.includes(patch.status!) && slaCycle.pausedAt) {
           const now = new Date();
           const pausedMinutes = businessMinutesBetween(slaCycle.pausedAt, now);
           const newTotal = slaCycle.pausedTotalBusinessMinutes + pausedMinutes;
@@ -1600,6 +1635,38 @@ export class DatabaseStorage implements IStorage {
       .from(ticketAssignees)
       .where(eq(ticketAssignees.ticketId, ticketId));
     return rows.map(r => r.userId);
+  }
+
+  async getTicketApproval(ticketId: string, cycleNumber: number): Promise<TicketApproval | undefined> {
+    const [row] = await db.select().from(ticketApprovals)
+      .where(and(eq(ticketApprovals.ticketId, ticketId), eq(ticketApprovals.cycleNumber, cycleNumber)));
+    return row;
+  }
+
+  async resolveApprovers(ticket: Ticket, category: TicketCategory): Promise<string[]> {
+    const mode = (category as any).approvalMode || "REQUESTER_COORDINATOR";
+    if (mode === "SPECIFIC_USERS") {
+      const ids = (category as any).approvalUserIds || [];
+      return Array.isArray(ids) ? ids : [];
+    }
+    if (mode === "TI_ADMIN") {
+      const rows = await db.select({ userId: userSectorRoles.userId })
+        .from(userSectorRoles)
+        .innerJoin(users, and(eq(userSectorRoles.userId, users.id), eq(users.isActive, true)))
+        .where(and(
+          eq(userSectorRoles.sectorId, ticket.targetSectorId),
+          eq(userSectorRoles.roleName, "Admin"),
+        ));
+      return [...new Set(rows.map(r => r.userId))];
+    }
+    const rows = await db.select({ userId: userSectorRoles.userId })
+      .from(userSectorRoles)
+      .innerJoin(users, and(eq(userSectorRoles.userId, users.id), eq(users.isActive, true)))
+      .where(and(
+        eq(userSectorRoles.sectorId, ticket.requesterSectorId),
+        eq(userSectorRoles.roleName, "Coordenador"),
+      ));
+    return [...new Set(rows.map(r => r.userId))];
   }
 
   async listKbArticles(filters: { categoryId?: string; q?: string; tags?: string[]; publishedOnly?: boolean }): Promise<(KbArticle & { categoryName?: string; authorName?: string; viewCount?: number; helpfulCount?: number; notHelpfulCount?: number })[]> {

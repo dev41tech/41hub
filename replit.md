@@ -22,7 +22,11 @@ Key features:
 - Light/dark theme support
 - Ticket/helpdesk module with SLA tracking, categories, comments, attachments
 - SLA manual deadline override per ticket (admin only)
-- SLA pause/resume: SLA pauses when ticket enters AGUARDANDO_USUARIO, resumes when leaving (pushes dueAt forward by paused business minutes)
+- SLA pause/resume: SLA pauses when ticket enters AGUARDANDO_USUARIO or AGUARDANDO_APROVACAO, resumes when leaving (pushes dueAt forward by paused business minutes)
+- Approval Workflow: categories can require approval (requiresApproval, approvalMode: REQUESTER_COORDINATOR|TI_ADMIN|SPECIFIC_USERS, approvalUserIds)
+- Ticket statuses: ABERTO, EM_ANDAMENTO, AGUARDANDO_USUARIO, AGUARDANDO_APROVACAO, RESOLVIDO, CANCELADO
+- SLA Escalation Job: runs every 5 min, checks FIRST_RISK/FIRST_BREACH/RES_RISK/RES_BREACH with dedup via ticket_alerts_dedup table
+- Webhooks: configurable URL + enabled toggle in admin settings, fires events (ticket_created, ticket_approved, ticket_rejected, ticket_status_changed, ticket_commented, ticket_resolved) with 5s timeout, 1 retry
 - Category description templates auto-filling ticket descriptions with placeholder support ({{field}})
 - Service Catalog: formSchema per category (dynamic form fields), requestData JSONB on tickets, templateApplyMode (replace_if_empty|always_replace|append)
 - Requerente displayed separately in ticket detail (not selectable as assignee); assignees restricted to Admin users only
@@ -65,7 +69,7 @@ Preferred communication style: Simple, everyday language.
 - **ORM**: Drizzle ORM with drizzle-zod for schema validation
 - **Schema Location**: `shared/schema.ts` (shared between frontend and backend)
 - **Migrations**: Drizzle Kit with `db:push` command
-- **Key Tables**: users, sectors, roles, user_sector_roles, resources, resource_overrides, favorites, recent_access, audit_logs, health_checks, ticket_categories, ticket_sla_policies, tickets, ticket_assignees, ticket_comments, ticket_attachments, ticket_sla_cycles, ticket_events, notification_settings, notifications, kb_articles, kb_article_views, kb_article_feedback, typing_texts, typing_sessions, typing_scores
+- **Key Tables**: users, sectors, roles, user_sector_roles, resources, resource_overrides, favorites, recent_access, audit_logs, health_checks, ticket_categories, ticket_sla_policies, tickets, ticket_assignees, ticket_comments, ticket_attachments, ticket_sla_cycles, ticket_events, notification_settings, notifications, kb_articles, kb_article_views, kb_article_feedback, typing_texts, typing_sessions, typing_scores, ticket_approvals, ticket_alerts_dedup
 
 ### Authentication Flow
 **Microsoft Entra ID:**

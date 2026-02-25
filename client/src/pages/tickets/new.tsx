@@ -26,11 +26,18 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Loader2, FileText } from "lucide-react";
+import { ArrowLeft, Loader2, FileText, BookOpen, ThumbsUp, ExternalLink } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import type { Sector, TicketCategoryTree } from "@shared/schema";
+import { Badge } from "@/components/ui/badge";
+import type { Sector, TicketCategoryTree, KbArticle } from "@shared/schema";
+
+type KbArticleWithMeta = KbArticle & {
+  categoryName?: string;
+  helpfulCount?: number;
+  viewCount?: number;
+};
 
 export default function TicketsNew() {
   const { user } = useAuth();
@@ -56,6 +63,17 @@ export default function TicketsNew() {
 
   const { data: categories = [] } = useQuery<TicketCategoryTree[]>({
     queryKey: ["/api/tickets/categories"],
+  });
+
+  const { data: kbSuggestions = [] } = useQuery<KbArticleWithMeta[]>({
+    queryKey: ["/api/kb", categoryId],
+    queryFn: async () => {
+      if (!categoryId) return [];
+      const res = await fetch(`/api/kb?categoryId=${categoryId}`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!categoryId,
   });
 
   const availableSectors: Array<{ id: string; name: string }> = (() => {
@@ -217,6 +235,41 @@ export default function TicketsNew() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {kbSuggestions.length > 0 && (
+                <Card className="border-chart-1/30 bg-chart-1/5">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <BookOpen className="h-4 w-4 text-chart-1" />
+                      <span className="text-sm font-medium">Artigos que podem ajudar</span>
+                      <Badge variant="secondary" className="text-xs">{kbSuggestions.length}</Badge>
+                    </div>
+                    <div className="space-y-2">
+                      {kbSuggestions.slice(0, 3).map(article => (
+                        <a
+                          key={article.id}
+                          href={`/api/kb/${article.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-between gap-2 rounded-md border bg-card p-3 hover-elevate cursor-pointer"
+                          data-testid={`kb-suggestion-${article.id}`}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{article.title}</p>
+                            {article.helpfulCount !== undefined && article.helpfulCount > 0 && (
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
+                                <ThumbsUp className="h-3 w-3" />
+                                <span>{article.helpfulCount}</span>
+                              </div>
+                            )}
+                          </div>
+                          <ExternalLink className="h-4 w-4 text-muted-foreground shrink-0" />
+                        </a>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
 
               <div className="space-y-2">
                 <Label htmlFor="priority">Prioridade</Label>

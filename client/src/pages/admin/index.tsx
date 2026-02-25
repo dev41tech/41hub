@@ -8,6 +8,9 @@ import {
   Settings,
   Ticket,
   Bell,
+  BookOpen,
+  BarChart3,
+  Keyboard,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardTitle } from "@/components/ui/card";
 import { useQuery } from "@tanstack/react-query";
@@ -33,6 +36,13 @@ const adminSections = [
     icon: Ticket,
     href: "/admin/tickets-settings",
     color: "bg-chart-2/10 text-chart-2",
+  },
+  {
+    title: "Base de Conhecimento",
+    description: "Gerenciar artigos da KB vinculados a categorias",
+    icon: BookOpen,
+    href: "/admin/kb",
+    color: "bg-chart-1/10 text-chart-1",
   },
   {
     title: "Auditoria",
@@ -61,6 +71,20 @@ const adminSections = [
     icon: Layout,
     href: "/admin/resources",
     color: "bg-primary/10 text-primary",
+  },
+  {
+    title: "Painel TI",
+    description: "Dashboard de operações e SLA de chamados",
+    icon: BarChart3,
+    href: "/admin/ti",
+    color: "bg-chart-1/10 text-chart-1",
+  },
+  {
+    title: "Textos Digitação",
+    description: "Gerenciar textos para o teste de digitação",
+    icon: Keyboard,
+    href: "/admin/typing",
+    color: "bg-chart-2/10 text-chart-2",
   },
 ];
 

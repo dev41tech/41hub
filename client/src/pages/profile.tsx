@@ -23,11 +23,15 @@ import {
   ExternalLink,
   Loader2,
   Search,
-  BookUser
+  BookUser,
+  Keyboard,
+  Zap,
+  Target,
+  Trophy,
 } from "lucide-react";
 import { SiWhatsapp } from "react-icons/si";
 import { useToast } from "@/hooks/use-toast";
-import type { TeamMember, ResourceWithHealth, Sector } from "@shared/schema";
+import type { TeamMember, ResourceWithHealth, Sector, TypingScore } from "@shared/schema";
 import { useLocation } from "wouter";
 
 function cleanPhoneNumber(phone: string): string {
@@ -96,6 +100,11 @@ export default function Profile() {
 
   const { data: recentAccess = [], isLoading: isLoadingRecent } = useQuery<ResourceWithHealth[]>({
     queryKey: ["/api/resources/recent"],
+    enabled: !!user,
+  });
+
+  const { data: typingBest, isLoading: isLoadingTyping } = useQuery<TypingScore | null>({
+    queryKey: ["/api/typing/me"],
     enabled: !!user,
   });
 
@@ -452,6 +461,55 @@ export default function Profile() {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Keyboard className="h-5 w-5" />
+            Teste de Digitação
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {isLoadingTyping ? (
+            <Skeleton className="h-16 w-full" />
+          ) : typingBest ? (
+            <div className="flex items-center gap-6 flex-wrap">
+              <div className="flex items-center gap-2">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+                  <Trophy className="h-5 w-5 text-primary" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Melhor resultado</p>
+                  <p className="font-bold text-lg" data-testid="text-typing-best-wpm">{typingBest.wpm} PPM</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Target className="h-4 w-4 text-green-500" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Precisão</p>
+                  <p className="font-medium" data-testid="text-typing-best-accuracy">{Number(typingBest.accuracy).toFixed(0)}%</p>
+                </div>
+              </div>
+              <Badge variant="secondary" data-testid="badge-typing-level">
+                <Zap className="h-3 w-3 mr-1" />
+                {typingBest.wpm >= 80 ? "Avançado" : typingBest.wpm >= 50 ? "Intermediário" : "Iniciante"}
+              </Badge>
+              <Button variant="outline" size="sm" onClick={() => setLocation("/typing")} data-testid="button-go-typing">
+                <Keyboard className="h-4 w-4 mr-2" />
+                Fazer Teste
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-4">
+              <p className="text-sm text-muted-foreground">Você ainda não fez nenhum teste de digitação.</p>
+              <Button variant="outline" size="sm" onClick={() => setLocation("/typing")} data-testid="button-go-typing-first">
+                <Keyboard className="h-4 w-4 mr-2" />
+                Fazer Teste
+              </Button>
             </div>
           )}
         </CardContent>

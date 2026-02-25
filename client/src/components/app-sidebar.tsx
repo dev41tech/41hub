@@ -8,6 +8,7 @@ import {
   LogOut,
   User,
   Ticket,
+  Keyboard,
 } from "lucide-react";
 import { ThemeLogo } from "@/components/theme-logo";
 import {
@@ -38,6 +39,7 @@ const mainMenuItems = [
   { title: "Apps", url: "/apps", icon: LayoutGrid },
   { title: "Dashboards", url: "/dashboards", icon: BarChart3 },
   { title: "Chamados", url: "/tickets", icon: Ticket },
+  { title: "Digitação", url: "/typing", icon: Keyboard },
   { title: "Favoritos", url: "/favorites", icon: Star },
 ];
 

@@ -1703,6 +1703,346 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ============ Knowledge Base Routes (User) ============
+
+  app.get("/api/kb", requireAuth, async (req, res) => {
+    try {
+      const articles = await storage.listKbArticles({
+        categoryId: req.query.categoryId as string | undefined,
+        q: req.query.q as string | undefined,
+        publishedOnly: true,
+      });
+      res.json(articles);
+    } catch (error) {
+      console.error("Error fetching KB articles:", error);
+      res.status(500).json({ error: "Failed to fetch KB articles" });
+    }
+  });
+
+  app.get("/api/kb/:id", requireAuth, async (req, res) => {
+    try {
+      const article = await storage.getKbArticle(req.params.id);
+      if (!article || (!article.isPublished && !req.user!.isAdmin)) {
+        return res.status(404).json({ error: "Artigo não encontrado" });
+      }
+      await storage.logKbArticleView(req.params.id, req.user!.id);
+      res.json(article);
+    } catch (error) {
+      console.error("Error fetching KB article:", error);
+      res.status(500).json({ error: "Failed to fetch KB article" });
+    }
+  });
+
+  app.post("/api/kb/:id/feedback", requireAuth, async (req, res) => {
+    try {
+      const feedbackSchema = z.object({ helpful: z.boolean() });
+      const parsed = feedbackSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos" });
+      }
+      const feedback = await storage.submitKbArticleFeedback(req.params.id, req.user!.id, parsed.data.helpful);
+      res.json(feedback);
+    } catch (error) {
+      console.error("Error submitting KB feedback:", error);
+      res.status(500).json({ error: "Failed to submit feedback" });
+    }
+  });
+
+  // ============ Knowledge Base Routes (Admin) ============
+
+  app.get("/api/admin/kb", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const articles = await storage.listKbArticles({
+        categoryId: req.query.categoryId as string | undefined,
+        q: req.query.q as string | undefined,
+        publishedOnly: false,
+      });
+      res.json(articles);
+    } catch (error) {
+      console.error("Error fetching KB articles:", error);
+      res.status(500).json({ error: "Failed to fetch KB articles" });
+    }
+  });
+
+  app.post("/api/admin/kb", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const createSchema = z.object({
+        title: z.string().min(1).max(200),
+        body: z.string().min(1),
+        categoryId: z.string().nullable().optional(),
+        isPublished: z.boolean().optional(),
+      });
+      const parsed = createSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+      }
+
+      const article = await storage.createKbArticle({
+        ...parsed.data,
+        createdBy: req.user!.id,
+        updatedBy: req.user!.id,
+      });
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "kb_article_create",
+        targetType: "kb_article",
+        targetId: article.id,
+        metadata: { title: article.title },
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.status(201).json(article);
+    } catch (error) {
+      console.error("Error creating KB article:", error);
+      res.status(500).json({ error: "Failed to create KB article" });
+    }
+  });
+
+  app.patch("/api/admin/kb/:id", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const updateSchema = z.object({
+        title: z.string().min(1).max(200).optional(),
+        body: z.string().min(1).optional(),
+        categoryId: z.string().nullable().optional(),
+        isPublished: z.boolean().optional(),
+      });
+      const parsed = updateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+      }
+
+      const updated = await storage.updateKbArticle(req.params.id, {
+        ...parsed.data,
+        updatedBy: req.user!.id,
+      });
+      if (!updated) return res.status(404).json({ error: "Artigo não encontrado" });
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "kb_article_update",
+        targetType: "kb_article",
+        targetId: req.params.id,
+        metadata: parsed.data,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating KB article:", error);
+      res.status(500).json({ error: "Failed to update KB article" });
+    }
+  });
+
+  app.delete("/api/admin/kb/:id", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      await storage.deleteKbArticle(req.params.id);
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "kb_article_delete",
+        targetType: "kb_article",
+        targetId: req.params.id,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting KB article:", error);
+      res.status(500).json({ error: "Failed to delete KB article" });
+    }
+  });
+
+  // ============ TI Dashboard Route ============
+
+  app.get("/api/admin/ti/dashboard", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const range = (req.query.range === '30d' ? '30d' : '7d') as '7d' | '30d';
+      const dashboard = await storage.getTiDashboard(range);
+      res.json(dashboard);
+    } catch (error) {
+      console.error("Error fetching TI dashboard:", error);
+      res.status(500).json({ error: "Failed to fetch TI dashboard" });
+    }
+  });
+
+  // ============ Typing Test Routes (User) ============
+
+  app.post("/api/typing/session", requireAuth, async (req, res) => {
+    try {
+      const activeTexts = await storage.listTypingTexts(true);
+      if (activeTexts.length === 0) {
+        return res.status(400).json({ error: "Nenhum texto disponível para digitação" });
+      }
+      const text = activeTexts[Math.floor(Math.random() * activeTexts.length)];
+      const nonce = crypto.randomBytes(16).toString("hex");
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      const session = await storage.createTypingSession(req.user!.id, text.id, nonce, expiresAt);
+      res.json({ session, text });
+    } catch (error) {
+      console.error("Error creating typing session:", error);
+      res.status(500).json({ error: "Failed to create typing session" });
+    }
+  });
+
+  app.post("/api/typing/submit", requireAuth, async (req, res) => {
+    try {
+      const schema = z.object({
+        sessionId: z.string().min(1),
+        nonce: z.string().min(1),
+        wpm: z.number().int().min(1).max(300),
+        accuracy: z.number().min(0).max(100),
+        durationMs: z.number().int().min(1000).max(600000),
+        typed: z.string().min(1),
+      });
+
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+      }
+
+      const session = await storage.getTypingSession(parsed.data.sessionId);
+      if (!session) return res.status(404).json({ error: "Sessão não encontrada" });
+      if (session.userId !== req.user!.id) return res.status(403).json({ error: "Sessão pertence a outro usuário" });
+      if (session.submittedAt) return res.status(400).json({ error: "Sessão já foi submetida" });
+      if (session.nonce !== parsed.data.nonce) return res.status(400).json({ error: "Nonce inválido" });
+      if (new Date() > session.expiresAt) return res.status(400).json({ error: "Sessão expirada" });
+
+      const text = session.textId ? await storage.getTypingText(session.textId) : null;
+      if (!text) return res.status(400).json({ error: "Texto original não encontrado" });
+
+      const minExpectedMs = (text.content.length / 20) * 60 * 1000 * 0.1;
+      if (parsed.data.durationMs < minExpectedMs) {
+        return res.status(400).json({ error: "Duração suspeita (anti-cheat)" });
+      }
+
+      const userSectorId = req.user!.roles?.[0]?.sectorId || null;
+      const now = new Date();
+      const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+      const score = await storage.submitTypingSession(parsed.data.sessionId, {
+        wpm: parsed.data.wpm,
+        accuracy: parsed.data.accuracy.toFixed(2),
+        durationMs: parsed.data.durationMs,
+        userId: req.user!.id,
+        sectorId: userSectorId,
+        monthKey,
+      });
+
+      res.json(score);
+    } catch (error) {
+      console.error("Error submitting typing session:", error);
+      res.status(500).json({ error: "Failed to submit typing session" });
+    }
+  });
+
+  app.get("/api/typing/leaderboard", requireAuth, async (req, res) => {
+    try {
+      const now = new Date();
+      const monthKey = (req.query.month as string) || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+      const sectorId = req.query.sectorId as string | undefined;
+      const leaderboard = await storage.getTypingLeaderboard({ monthKey, sectorId });
+      res.json(leaderboard);
+    } catch (error) {
+      console.error("Error fetching leaderboard:", error);
+      res.status(500).json({ error: "Failed to fetch leaderboard" });
+    }
+  });
+
+  app.get("/api/typing/me", requireAuth, async (req, res) => {
+    try {
+      const best = await storage.getUserBestTypingScore(req.user!.id);
+      res.json(best || null);
+    } catch (error) {
+      console.error("Error fetching user typing score:", error);
+      res.status(500).json({ error: "Failed to fetch user typing score" });
+    }
+  });
+
+  // ============ Admin Typing Text Routes ============
+
+  app.get("/api/admin/typing/texts", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const texts = await storage.listTypingTexts(false);
+      res.json(texts);
+    } catch (error) {
+      console.error("Error fetching typing texts:", error);
+      res.status(500).json({ error: "Failed to fetch typing texts" });
+    }
+  });
+
+  app.post("/api/admin/typing/texts", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        content: z.string().min(10),
+        language: z.string().max(10).optional(),
+        difficulty: z.number().int().min(1).max(5).optional(),
+        isActive: z.boolean().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+      }
+      const text = await storage.createTypingText(parsed.data as any);
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "typing_text_create",
+        targetType: "typing_text",
+        targetId: text.id,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+      res.status(201).json(text);
+    } catch (error) {
+      console.error("Error creating typing text:", error);
+      res.status(500).json({ error: "Failed to create typing text" });
+    }
+  });
+
+  app.patch("/api/admin/typing/texts/:id", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        content: z.string().min(10).optional(),
+        language: z.string().max(10).optional(),
+        difficulty: z.number().int().min(1).max(5).optional(),
+        isActive: z.boolean().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos" });
+      }
+      const updated = await storage.updateTypingText(req.params.id, parsed.data as any);
+      if (!updated) return res.status(404).json({ error: "Texto não encontrado" });
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "typing_text_update",
+        targetType: "typing_text",
+        targetId: req.params.id,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating typing text:", error);
+      res.status(500).json({ error: "Failed to update typing text" });
+    }
+  });
+
+  app.delete("/api/admin/typing/texts/:id", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      await storage.deleteTypingText(req.params.id);
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "typing_text_delete",
+        targetType: "typing_text",
+        targetId: req.params.id,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting typing text:", error);
+      res.status(500).json({ error: "Failed to delete typing text" });
+    }
+  });
+
   // Health check endpoint for backend
   app.get("/health", (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, boolean, timestamp, integer, jsonb, pgEnum, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, timestamp, integer, jsonb, pgEnum, unique, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -378,6 +378,85 @@ export type InsertNotificationSetting = z.infer<typeof insertNotificationSetting
 
 export type Notification = typeof notifications.$inferSelect;
 export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+
+// ============ Knowledge Base ============
+
+export const kbArticles = pgTable("kb_articles", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  title: varchar("title", { length: 200 }).notNull(),
+  body: text("body").notNull(),
+  categoryId: varchar("category_id", { length: 36 }).references(() => ticketCategories.id, { onDelete: "set null" }),
+  isPublished: boolean("is_published").notNull().default(true),
+  createdBy: varchar("created_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  updatedBy: varchar("updated_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const kbArticleViews = pgTable("kb_article_views", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  articleId: varchar("article_id", { length: 36 }).notNull().references(() => kbArticles.id, { onDelete: "cascade" }),
+  userId: varchar("user_id", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  viewedAt: timestamp("viewed_at").notNull().defaultNow(),
+});
+
+export const kbArticleFeedback = pgTable("kb_article_feedback", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  articleId: varchar("article_id", { length: 36 }).notNull().references(() => kbArticles.id, { onDelete: "cascade" }),
+  userId: varchar("user_id", { length: 36 }).notNull().references(() => users.id, { onDelete: "cascade" }),
+  helpful: boolean("helpful").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [unique().on(t.articleId, t.userId)]);
+
+export const insertKbArticleSchema = createInsertSchema(kbArticles).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertKbArticleFeedbackSchema = createInsertSchema(kbArticleFeedback).omit({ id: true, createdAt: true });
+
+export type KbArticle = typeof kbArticles.$inferSelect;
+export type InsertKbArticle = z.infer<typeof insertKbArticleSchema>;
+export type KbArticleFeedback = typeof kbArticleFeedback.$inferSelect;
+export type KbArticleView = typeof kbArticleViews.$inferSelect;
+
+// ============ Typing Test ============
+
+export const typingTexts = pgTable("typing_texts", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  language: varchar("language", { length: 10 }).notNull().default("pt"),
+  content: text("content").notNull(),
+  difficulty: integer("difficulty").notNull().default(1),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const typingSessions = pgTable("typing_sessions", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id", { length: 36 }).notNull().references(() => users.id, { onDelete: "cascade" }),
+  textId: varchar("text_id", { length: 36 }).references(() => typingTexts.id, { onDelete: "set null" }),
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  expiresAt: timestamp("expires_at").notNull(),
+  nonce: varchar("nonce", { length: 32 }).notNull().unique(),
+  submittedAt: timestamp("submitted_at"),
+});
+
+export const typingScores = pgTable("typing_scores", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id", { length: 36 }).notNull().references(() => users.id, { onDelete: "cascade" }),
+  sectorId: varchar("sector_id", { length: 36 }).references(() => sectors.id, { onDelete: "set null" }),
+  monthKey: varchar("month_key", { length: 7 }).notNull(),
+  wpm: integer("wpm").notNull(),
+  accuracy: numeric("accuracy", { precision: 5, scale: 2 }).notNull(),
+  durationMs: integer("duration_ms").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const insertTypingTextSchema = createInsertSchema(typingTexts).omit({ id: true, createdAt: true });
+export const insertTypingSessionSchema = createInsertSchema(typingSessions).omit({ id: true });
+export const insertTypingScoreSchema = createInsertSchema(typingScores).omit({ id: true, createdAt: true });
+
+export type TypingText = typeof typingTexts.$inferSelect;
+export type InsertTypingText = z.infer<typeof insertTypingTextSchema>;
+export type TypingSession = typeof typingSessions.$inferSelect;
+export type TypingScore = typeof typingScores.$inferSelect;
+export type InsertTypingScore = z.infer<typeof insertTypingScoreSchema>;
 
 // Extended types for frontend
 export type ResourceWithHealth = Resource & {

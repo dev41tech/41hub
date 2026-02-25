@@ -26,6 +26,9 @@ Key features:
 - In-app notification system with bell icon, unread count, per-type admin toggles
 - Notification dispatching on ticket create, comment, and status change
 - Admin "Configurações" panel with consolidated pages (users+password, tickets settings, notifications)
+- IT Ops Dashboard (Painel TI) with SLA monitoring, queue view, WIP by assignee, throughput metrics
+- Knowledge Base (KB) with articles linked to ticket categories, article suggestions on ticket creation
+- Typing Test with monthly leaderboard (sector + global), anti-cheat validation, profile badge
 
 ## User Preferences
 
@@ -55,7 +58,7 @@ Preferred communication style: Simple, everyday language.
 - **ORM**: Drizzle ORM with drizzle-zod for schema validation
 - **Schema Location**: `shared/schema.ts` (shared between frontend and backend)
 - **Migrations**: Drizzle Kit with `db:push` command
-- **Key Tables**: users, sectors, roles, user_sector_roles, resources, resource_overrides, favorites, recent_access, audit_logs, health_checks, ticket_categories, ticket_sla_policies, tickets, ticket_assignees, ticket_comments, ticket_attachments, ticket_sla_cycles, ticket_events, notification_settings, notifications
+- **Key Tables**: users, sectors, roles, user_sector_roles, resources, resource_overrides, favorites, recent_access, audit_logs, health_checks, ticket_categories, ticket_sla_policies, tickets, ticket_assignees, ticket_comments, ticket_attachments, ticket_sla_cycles, ticket_events, notification_settings, notifications, kb_articles, kb_article_views, kb_article_feedback, typing_texts, typing_sessions, typing_scores
 
 ### Authentication Flow
 **Microsoft Entra ID:**

@@ -54,6 +54,19 @@ import {
   type TicketAssignee,
   type NotificationSetting,
   type Notification,
+  kbArticles,
+  kbArticleViews,
+  kbArticleFeedback,
+  type KbArticle,
+  type InsertKbArticle,
+  type KbArticleFeedback as KbArticleFeedbackType,
+  typingTexts,
+  typingSessions,
+  typingScores,
+  type TypingText,
+  type InsertTypingText,
+  type TypingSession,
+  type TypingScore,
 } from "@shared/schema";
 import { computeSlaDueDates } from "./lib/sla";
 
@@ -227,6 +240,44 @@ export interface IStorage {
 
   // Notification helpers
   getTicketAssigneeIds(ticketId: string): Promise<string[]>;
+
+  // Knowledge Base
+  listKbArticles(filters: { categoryId?: string; q?: string; publishedOnly?: boolean }): Promise<(KbArticle & { categoryName?: string; authorName?: string; viewCount?: number; helpfulCount?: number; notHelpfulCount?: number })[]>;
+  getKbArticle(id: string): Promise<(KbArticle & { categoryName?: string; authorName?: string; viewCount?: number; helpfulCount?: number; notHelpfulCount?: number }) | undefined>;
+  createKbArticle(data: InsertKbArticle): Promise<KbArticle>;
+  updateKbArticle(id: string, data: Partial<InsertKbArticle>): Promise<KbArticle | undefined>;
+  deleteKbArticle(id: string): Promise<boolean>;
+  logKbArticleView(articleId: string, userId: string): Promise<void>;
+  submitKbArticleFeedback(articleId: string, userId: string, helpful: boolean): Promise<KbArticleFeedbackType>;
+
+  // Typing Test
+  listTypingTexts(activeOnly?: boolean): Promise<TypingText[]>;
+  getTypingText(id: string): Promise<TypingText | undefined>;
+  createTypingText(data: InsertTypingText): Promise<TypingText>;
+  updateTypingText(id: string, data: Partial<InsertTypingText>): Promise<TypingText | undefined>;
+  deleteTypingText(id: string): Promise<boolean>;
+  createTypingSession(userId: string, textId: string, nonce: string, expiresAt: Date): Promise<TypingSession>;
+  getTypingSession(id: string): Promise<TypingSession | undefined>;
+  getTypingSessionByNonce(nonce: string): Promise<TypingSession | undefined>;
+  submitTypingSession(sessionId: string, score: { wpm: number; accuracy: string; durationMs: number; userId: string; sectorId: string | null; monthKey: string }): Promise<TypingScore>;
+  getTypingLeaderboard(opts: { monthKey: string; sectorId?: string; limit?: number }): Promise<Array<{ userId: string; userName: string; userPhoto: string | null; sectorName: string | null; wpm: number; accuracy: string; monthKey: string }>>;
+  getUserBestTypingScore(userId: string): Promise<TypingScore | undefined>;
+
+  // TI Dashboard
+  getTiDashboard(range: '7d' | '30d'): Promise<{
+    summary: { open: number; inProgress: number; waitingUser: number; resolved: number; cancelled: number; slaOk: number; slaRisk: number; slaBreached: number };
+    queue: Array<{
+      ticketId: string; title: string; status: string; priority: string;
+      categoryName: string; categoryBranch: string;
+      creatorName: string; createdAt: string;
+      assignees: string[];
+      slaState: 'OK' | 'RISK' | 'BREACHED';
+      resolutionDueAt: string | null;
+    }>;
+    wipByAssignee: Array<{ userId: string; userName: string; count: number }>;
+    throughput: Array<{ date: string; resolved: number; opened: number }>;
+    backlogByCategory: Array<{ categoryName: string; categoryBranch: string; count: number }>;
+  }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1451,6 +1502,430 @@ export class DatabaseStorage implements IStorage {
       .from(ticketAssignees)
       .where(eq(ticketAssignees.ticketId, ticketId));
     return rows.map(r => r.userId);
+  }
+
+  async listKbArticles(filters: { categoryId?: string; q?: string; publishedOnly?: boolean }): Promise<(KbArticle & { categoryName?: string; authorName?: string; viewCount?: number; helpfulCount?: number; notHelpfulCount?: number })[]> {
+    const conditions: any[] = [];
+    if (filters.publishedOnly) {
+      conditions.push(eq(kbArticles.isPublished, true));
+    }
+    if (filters.categoryId) {
+      conditions.push(eq(kbArticles.categoryId, filters.categoryId));
+    }
+    if (filters.q) {
+      conditions.push(or(
+        ilike(kbArticles.title, `%${filters.q}%`),
+        ilike(kbArticles.body, `%${filters.q}%`)
+      ));
+    }
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const rows = await db
+      .select({
+        article: kbArticles,
+        categoryName: ticketCategories.name,
+        authorName: users.name,
+      })
+      .from(kbArticles)
+      .leftJoin(ticketCategories, eq(kbArticles.categoryId, ticketCategories.id))
+      .leftJoin(users, eq(kbArticles.createdBy, users.id))
+      .where(where)
+      .orderBy(desc(kbArticles.updatedAt));
+
+    const articleIds = rows.map(r => r.article.id);
+    if (articleIds.length === 0) return [];
+
+    const viewCounts = await db
+      .select({ articleId: kbArticleViews.articleId, count: sql<number>`count(*)::int` })
+      .from(kbArticleViews)
+      .where(inArray(kbArticleViews.articleId, articleIds))
+      .groupBy(kbArticleViews.articleId);
+
+    const helpfulCounts = await db
+      .select({
+        articleId: kbArticleFeedback.articleId,
+        helpful: kbArticleFeedback.helpful,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(kbArticleFeedback)
+      .where(inArray(kbArticleFeedback.articleId, articleIds))
+      .groupBy(kbArticleFeedback.articleId, kbArticleFeedback.helpful);
+
+    const viewMap = new Map(viewCounts.map(v => [v.articleId, v.count]));
+    const helpfulMap = new Map<string, { helpful: number; notHelpful: number }>();
+    for (const h of helpfulCounts) {
+      const entry = helpfulMap.get(h.articleId) || { helpful: 0, notHelpful: 0 };
+      if (h.helpful) entry.helpful = h.count;
+      else entry.notHelpful = h.count;
+      helpfulMap.set(h.articleId, entry);
+    }
+
+    return rows.map(r => ({
+      ...r.article,
+      categoryName: r.categoryName || undefined,
+      authorName: r.authorName || undefined,
+      viewCount: viewMap.get(r.article.id) || 0,
+      helpfulCount: helpfulMap.get(r.article.id)?.helpful || 0,
+      notHelpfulCount: helpfulMap.get(r.article.id)?.notHelpful || 0,
+    }));
+  }
+
+  async getKbArticle(id: string): Promise<(KbArticle & { categoryName?: string; authorName?: string; viewCount?: number; helpfulCount?: number; notHelpfulCount?: number }) | undefined> {
+    const [row] = await db
+      .select({
+        article: kbArticles,
+        categoryName: ticketCategories.name,
+        authorName: users.name,
+      })
+      .from(kbArticles)
+      .leftJoin(ticketCategories, eq(kbArticles.categoryId, ticketCategories.id))
+      .leftJoin(users, eq(kbArticles.createdBy, users.id))
+      .where(eq(kbArticles.id, id));
+
+    if (!row) return undefined;
+
+    const [viewCount] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(kbArticleViews)
+      .where(eq(kbArticleViews.articleId, id));
+
+    const feedbackCounts = await db
+      .select({
+        helpful: kbArticleFeedback.helpful,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(kbArticleFeedback)
+      .where(eq(kbArticleFeedback.articleId, id))
+      .groupBy(kbArticleFeedback.helpful);
+
+    let helpfulCount = 0;
+    let notHelpfulCount = 0;
+    for (const f of feedbackCounts) {
+      if (f.helpful) helpfulCount = f.count;
+      else notHelpfulCount = f.count;
+    }
+
+    return {
+      ...row.article,
+      categoryName: row.categoryName || undefined,
+      authorName: row.authorName || undefined,
+      viewCount: viewCount?.count || 0,
+      helpfulCount,
+      notHelpfulCount,
+    };
+  }
+
+  async createKbArticle(data: InsertKbArticle): Promise<KbArticle> {
+    const [article] = await db.insert(kbArticles).values(data).returning();
+    return article;
+  }
+
+  async updateKbArticle(id: string, data: Partial<InsertKbArticle>): Promise<KbArticle | undefined> {
+    const [updated] = await db.update(kbArticles)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(kbArticles.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteKbArticle(id: string): Promise<boolean> {
+    await db.delete(kbArticles).where(eq(kbArticles.id, id));
+    return true;
+  }
+
+  async logKbArticleView(articleId: string, userId: string): Promise<void> {
+    await db.insert(kbArticleViews).values({ articleId, userId });
+  }
+
+  async submitKbArticleFeedback(articleId: string, userId: string, helpful: boolean): Promise<KbArticleFeedbackType> {
+    const [existing] = await db.select().from(kbArticleFeedback)
+      .where(and(eq(kbArticleFeedback.articleId, articleId), eq(kbArticleFeedback.userId, userId)));
+    if (existing) {
+      const [updated] = await db.update(kbArticleFeedback)
+        .set({ helpful })
+        .where(eq(kbArticleFeedback.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(kbArticleFeedback)
+      .values({ articleId, userId, helpful })
+      .returning();
+    return created;
+  }
+
+  async getTiDashboard(range: '7d' | '30d') {
+    const now = new Date();
+    const daysBack = range === '7d' ? 7 : 30;
+    const rangeStart = new Date(now.getTime() - daysBack * 24 * 60 * 60 * 1000);
+
+    const activeStatuses = ['ABERTO', 'EM_ANDAMENTO', 'AGUARDANDO_USUARIO'] as const;
+    const allActiveTickets = await db.select().from(tickets)
+      .where(inArray(tickets.status, [...activeStatuses]));
+
+    const openCount = allActiveTickets.filter(t => t.status === 'ABERTO').length;
+    const inProgressCount = allActiveTickets.filter(t => t.status === 'EM_ANDAMENTO').length;
+    const waitingUserCount = allActiveTickets.filter(t => t.status === 'AGUARDANDO_USUARIO').length;
+
+    const resolvedInRange = await db.select({ count: sql<number>`count(*)::int` })
+      .from(tickets)
+      .where(and(eq(tickets.status, 'RESOLVIDO'), sql`${tickets.closedAt} >= ${rangeStart}`));
+    const resolvedCount = resolvedInRange[0]?.count || 0;
+
+    const cancelledInRange = await db.select({ count: sql<number>`count(*)::int` })
+      .from(tickets)
+      .where(and(eq(tickets.status, 'CANCELADO'), sql`${tickets.closedAt} >= ${rangeStart}`));
+    const cancelledCount = cancelledInRange[0]?.count || 0;
+
+    const activeCycles = await db.select()
+      .from(ticketSlaCycles)
+      .where(inArray(ticketSlaCycles.ticketId, allActiveTickets.map(t => t.id).length > 0 ? allActiveTickets.map(t => t.id) : ['__none__']));
+
+    const cycleByTicket = new Map<string, typeof activeCycles[0]>();
+    for (const c of activeCycles) {
+      const existing = cycleByTicket.get(c.ticketId);
+      if (!existing || c.cycleNumber > existing.cycleNumber) {
+        cycleByTicket.set(c.ticketId, c);
+      }
+    }
+
+    function computeSlaState(cycle: typeof activeCycles[0] | undefined): 'OK' | 'RISK' | 'BREACHED' {
+      if (!cycle) return 'OK';
+      const dueAt = cycle.resolutionDueAt.getTime();
+      const nowMs = now.getTime();
+      if (nowMs > dueAt) return 'BREACHED';
+      const totalDuration = dueAt - cycle.openedAt.getTime();
+      const riskThreshold = Math.min(totalDuration * 0.2, 60 * 60 * 1000);
+      if ((dueAt - nowMs) <= riskThreshold) return 'RISK';
+      return 'OK';
+    }
+
+    let slaOk = 0, slaRisk = 0, slaBreached = 0;
+    for (const t of allActiveTickets) {
+      const state = computeSlaState(cycleByTicket.get(t.id));
+      if (state === 'OK') slaOk++;
+      else if (state === 'RISK') slaRisk++;
+      else slaBreached++;
+    }
+
+    const allCategories = await db.select().from(ticketCategories);
+    const catMap = new Map(allCategories.map(c => [c.id, c]));
+    const allUsers = await db.select({ id: users.id, name: users.name }).from(users);
+    const userMap = new Map(allUsers.map(u => [u.id, u.name]));
+
+    const allAssignees = allActiveTickets.length > 0
+      ? await db.select().from(ticketAssignees)
+          .where(inArray(ticketAssignees.ticketId, allActiveTickets.map(t => t.id)))
+      : [];
+    const assigneesByTicket = new Map<string, string[]>();
+    for (const a of allAssignees) {
+      const arr = assigneesByTicket.get(a.ticketId) || [];
+      arr.push(userMap.get(a.userId) || a.userId);
+      assigneesByTicket.set(a.ticketId, arr);
+    }
+
+    const queue = allActiveTickets.map(t => {
+      const cat = catMap.get(t.categoryId);
+      const cycle = cycleByTicket.get(t.id);
+      return {
+        ticketId: t.id,
+        title: t.title,
+        status: t.status,
+        priority: t.priority,
+        categoryName: cat?.name || '',
+        categoryBranch: cat?.branch || '',
+        creatorName: userMap.get(t.createdBy) || '',
+        createdAt: t.createdAt.toISOString(),
+        assignees: assigneesByTicket.get(t.id) || [],
+        slaState: computeSlaState(cycle),
+        resolutionDueAt: cycle?.resolutionDueAt?.toISOString() || null,
+      };
+    });
+
+    const wipMap = new Map<string, number>();
+    for (const a of allAssignees) {
+      const ticket = allActiveTickets.find(t => t.id === a.ticketId);
+      if (ticket && (ticket.status === 'EM_ANDAMENTO' || ticket.status === 'ABERTO')) {
+        wipMap.set(a.userId, (wipMap.get(a.userId) || 0) + 1);
+      }
+    }
+    const wipByAssignee = Array.from(wipMap.entries()).map(([userId, count]) => ({
+      userId,
+      userName: userMap.get(userId) || userId,
+      count,
+    })).sort((a, b) => b.count - a.count);
+
+    const throughputDays: Array<{ date: string; resolved: number; opened: number }> = [];
+    for (let i = daysBack - 1; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+      const dayStr = d.toISOString().slice(0, 10);
+      throughputDays.push({ date: dayStr, resolved: 0, opened: 0 });
+    }
+
+    const ticketsInRange = await db.select().from(tickets)
+      .where(sql`${tickets.createdAt} >= ${rangeStart}`);
+
+    const resolvedTicketsInRange = await db.select().from(tickets)
+      .where(and(
+        eq(tickets.status, 'RESOLVIDO'),
+        sql`${tickets.closedAt} >= ${rangeStart}`,
+      ));
+
+    for (const t of ticketsInRange) {
+      const dayStr = t.createdAt.toISOString().slice(0, 10);
+      const entry = throughputDays.find(d => d.date === dayStr);
+      if (entry) entry.opened++;
+    }
+    for (const t of resolvedTicketsInRange) {
+      if (t.closedAt) {
+        const dayStr = t.closedAt.toISOString().slice(0, 10);
+        const entry = throughputDays.find(d => d.date === dayStr);
+        if (entry) entry.resolved++;
+      }
+    }
+
+    const backlogMap = new Map<string, number>();
+    for (const t of allActiveTickets) {
+      backlogMap.set(t.categoryId, (backlogMap.get(t.categoryId) || 0) + 1);
+    }
+    const backlogByCategory = Array.from(backlogMap.entries()).map(([catId, count]) => {
+      const cat = catMap.get(catId);
+      return {
+        categoryName: cat?.name || 'Sem categoria',
+        categoryBranch: cat?.branch || '',
+        count,
+      };
+    }).sort((a, b) => b.count - a.count);
+
+    return {
+      summary: {
+        open: openCount,
+        inProgress: inProgressCount,
+        waitingUser: waitingUserCount,
+        resolved: resolvedCount,
+        cancelled: cancelledCount,
+        slaOk,
+        slaRisk,
+        slaBreached,
+      },
+      queue,
+      wipByAssignee,
+      throughput: throughputDays,
+      backlogByCategory,
+    };
+  }
+
+  async listTypingTexts(activeOnly?: boolean): Promise<TypingText[]> {
+    if (activeOnly) {
+      return db.select().from(typingTexts).where(eq(typingTexts.isActive, true)).orderBy(typingTexts.createdAt);
+    }
+    return db.select().from(typingTexts).orderBy(typingTexts.createdAt);
+  }
+
+  async getTypingText(id: string): Promise<TypingText | undefined> {
+    const [row] = await db.select().from(typingTexts).where(eq(typingTexts.id, id));
+    return row;
+  }
+
+  async createTypingText(data: InsertTypingText): Promise<TypingText> {
+    const [row] = await db.insert(typingTexts).values(data).returning();
+    return row;
+  }
+
+  async updateTypingText(id: string, data: Partial<InsertTypingText>): Promise<TypingText | undefined> {
+    const [row] = await db.update(typingTexts).set(data).where(eq(typingTexts.id, id)).returning();
+    return row;
+  }
+
+  async deleteTypingText(id: string): Promise<boolean> {
+    await db.delete(typingTexts).where(eq(typingTexts.id, id));
+    return true;
+  }
+
+  async createTypingSession(userId: string, textId: string, nonce: string, expiresAt: Date): Promise<TypingSession> {
+    const [row] = await db.insert(typingSessions).values({
+      userId,
+      textId,
+      nonce,
+      startedAt: new Date(),
+      expiresAt,
+    }).returning();
+    return row;
+  }
+
+  async getTypingSession(id: string): Promise<TypingSession | undefined> {
+    const [row] = await db.select().from(typingSessions).where(eq(typingSessions.id, id));
+    return row;
+  }
+
+  async getTypingSessionByNonce(nonce: string): Promise<TypingSession | undefined> {
+    const [row] = await db.select().from(typingSessions).where(eq(typingSessions.nonce, nonce));
+    return row;
+  }
+
+  async submitTypingSession(sessionId: string, score: { wpm: number; accuracy: string; durationMs: number; userId: string; sectorId: string | null; monthKey: string }): Promise<TypingScore> {
+    await db.update(typingSessions).set({ submittedAt: new Date() }).where(eq(typingSessions.id, sessionId));
+    const [row] = await db.insert(typingScores).values({
+      userId: score.userId,
+      sectorId: score.sectorId,
+      monthKey: score.monthKey,
+      wpm: score.wpm,
+      accuracy: score.accuracy,
+      durationMs: score.durationMs,
+    }).returning();
+    return row;
+  }
+
+  async getTypingLeaderboard(opts: { monthKey: string; sectorId?: string; limit?: number }): Promise<Array<{ userId: string; userName: string; userPhoto: string | null; sectorName: string | null; wpm: number; accuracy: string; monthKey: string }>> {
+    const conditions: any[] = [eq(typingScores.monthKey, opts.monthKey)];
+    if (opts.sectorId) {
+      conditions.push(eq(typingScores.sectorId, opts.sectorId));
+    }
+
+    const rows = await db
+      .select({
+        id: typingScores.id,
+        userId: typingScores.userId,
+        userName: users.name,
+        userPhoto: users.photoUrl,
+        sectorName: sectors.name,
+        wpm: typingScores.wpm,
+        accuracy: typingScores.accuracy,
+        monthKey: typingScores.monthKey,
+      })
+      .from(typingScores)
+      .innerJoin(users, eq(typingScores.userId, users.id))
+      .leftJoin(sectors, eq(typingScores.sectorId, sectors.id))
+      .where(and(...conditions))
+      .orderBy(desc(typingScores.wpm))
+      .limit(opts.limit || 50);
+
+    const bestByUser = new Map<string, typeof rows[0]>();
+    for (const row of rows) {
+      const existing = bestByUser.get(row.userId);
+      if (!existing || row.wpm > existing.wpm) {
+        bestByUser.set(row.userId, row);
+      }
+    }
+
+    return Array.from(bestByUser.values())
+      .sort((a, b) => b.wpm - a.wpm)
+      .map(r => ({
+        userId: r.userId,
+        userName: r.userName,
+        userPhoto: r.userPhoto,
+        sectorName: r.sectorName || null,
+        wpm: r.wpm,
+        accuracy: r.accuracy,
+        monthKey: r.monthKey,
+      }));
+  }
+
+  async getUserBestTypingScore(userId: string): Promise<TypingScore | undefined> {
+    const [row] = await db.select().from(typingScores)
+      .where(eq(typingScores.userId, userId))
+      .orderBy(desc(typingScores.wpm))
+      .limit(1);
+    return row;
   }
 }
 

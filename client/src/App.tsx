@@ -35,9 +35,14 @@ import AdminTicketCategories from "@/pages/admin/ticket-categories";
 import AdminTicketSlaPolicies from "@/pages/admin/ticket-sla";
 import AdminTicketsSettings from "@/pages/admin/tickets-settings";
 import AdminNotifications from "@/pages/admin/notifications";
+import AdminKb from "@/pages/admin/kb";
+import AdminTiDashboard from "@/pages/admin/ti-dashboard";
+import AdminTyping from "@/pages/admin/typing";
 import TicketsIndex from "@/pages/tickets/index";
 import TicketsNew from "@/pages/tickets/new";
 import TicketsDetail from "@/pages/tickets/detail";
+import TypingTest from "@/pages/typing";
+import TypingLeaderboard from "@/pages/typing-leaderboard";
 
 function Router() {
   return (
@@ -51,6 +56,8 @@ function Router() {
       <Route path="/tickets" component={TicketsIndex} />
       <Route path="/tickets/new" component={TicketsNew} />
       <Route path="/tickets/:id" component={TicketsDetail} />
+      <Route path="/typing" component={TypingTest} />
+      <Route path="/typing/leaderboard" component={TypingLeaderboard} />
       <Route path="/admin" component={AdminIndex} />
       <Route path="/admin/sectors" component={AdminSectors} />
       <Route path="/admin/users" component={AdminUsers} />
@@ -59,6 +66,9 @@ function Router() {
       <Route path="/admin/settings" component={AdminSettings} />
       <Route path="/admin/tickets-settings" component={AdminTicketsSettings} />
       <Route path="/admin/notifications" component={AdminNotifications} />
+      <Route path="/admin/kb" component={AdminKb} />
+      <Route path="/admin/ti" component={AdminTiDashboard} />
+      <Route path="/admin/typing" component={AdminTyping} />
       <Route path="/admin/tickets/categories" component={AdminTicketCategories} />
       <Route path="/admin/tickets/sla" component={AdminTicketSlaPolicies} />
       <Route component={NotFound} />

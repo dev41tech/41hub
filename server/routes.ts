@@ -1202,6 +1202,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         priority: z.enum(["BAIXA", "MEDIA", "ALTA", "URGENTE"]).optional(),
         relatedResourceId: z.string().optional(),
         tags: z.array(z.string()).optional(),
+        requestData: z.record(z.any()).optional(),
       });
 
       const parsed = createTicketSchema.safeParse(req.body);
@@ -1218,7 +1219,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
-      const ticket = await storage.createTicket(parsed.data, req.user!);
+      const allCats = await storage.listAllTicketCategories();
+      const category = allCats.find(c => c.id === parsed.data.categoryId);
+      if (!category) {
+        return res.status(400).json({ error: "Categoria não encontrada" });
+      }
+
+      if (category.formSchema && Array.isArray(category.formSchema) && category.formSchema.length > 0) {
+        const reqData = parsed.data.requestData || {};
+        const missing: string[] = [];
+        for (const field of category.formSchema) {
+          if (field.required) {
+            const val = reqData[field.key];
+            if (val === undefined || val === null || (typeof val === "string" && !val.trim())) {
+              missing.push(field.key);
+            }
+          }
+        }
+        if (missing.length > 0) {
+          return res.status(400).json({ error: "Campos obrigatórios faltando", missing });
+        }
+      }
+
+      let description = parsed.data.description;
+      if (category.descriptionTemplate) {
+        const template = category.descriptionTemplate;
+        const mode = category.templateApplyMode || "replace_if_empty";
+        const rd = parsed.data.requestData || {};
+        const applied = template.replace(/\{\{(\w+)\}\}/g, (_, key) => rd[key] ?? "");
+        if (mode === "always_replace") {
+          description = applied;
+        } else if (mode === "append") {
+          description = description + "\n\n" + applied;
+        } else if (mode === "replace_if_empty" && !parsed.data.description.trim()) {
+          description = applied;
+        }
+      }
+
+      const ticket = await storage.createTicket({
+        ...parsed.data,
+        description,
+        requestData: parsed.data.requestData || {},
+      }, req.user!);
 
       try {
         const enabled = await storage.isNotificationEnabled("ticket_created");
@@ -1334,8 +1376,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const adminUsers = await storage.getAdminUserIds();
       for (const aid of parsed.data.assigneeIds) {
-        if (!adminUsers.includes(aid) && aid !== ticket.createdBy) {
-          return res.status(400).json({ error: `Responsável ${aid} deve ser admin ou o requerente do chamado` });
+        if (!adminUsers.includes(aid)) {
+          return res.status(400).json({ error: `Responsável ${aid} deve ser um administrador` });
         }
       }
 
@@ -1532,6 +1574,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         parentId: z.string().nullable().optional(),
         isActive: z.boolean().optional(),
         descriptionTemplate: z.string().nullable().optional(),
+        formSchema: z.array(z.object({
+          key: z.string().min(1),
+          label: z.string().min(1),
+          type: z.enum(["text", "email", "number", "textarea", "select"]),
+          required: z.boolean().optional(),
+          options: z.array(z.string()).optional(),
+        })).nullable().optional(),
+        templateApplyMode: z.enum(["replace_if_empty", "always_replace", "append"]).optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) {

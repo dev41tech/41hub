@@ -36,6 +36,48 @@ function brtToUtc(brt: Date): Date {
   return new Date(brt.getTime() - BRT_OFFSET_MS);
 }
 
+export function businessMinutesBetween(startUtc: Date, endUtc: Date): number {
+  if (endUtc <= startUtc) return 0;
+  let total = 0;
+  let current = utcToBrt(new Date(startUtc.getTime()));
+  const end = utcToBrt(endUtc);
+
+  while (current < end) {
+    const dow = current.getDay();
+    const bd = BUSINESS_DAYS[dow];
+
+    if (!bd) {
+      current.setDate(current.getDate() + 1);
+      current.setHours(0, 0, 0, 0);
+      continue;
+    }
+
+    const currentHour = current.getHours() + current.getMinutes() / 60;
+
+    if (currentHour < bd.startHour) {
+      current.setHours(bd.startHour, 0, 0, 0);
+      continue;
+    }
+
+    if (currentHour >= bd.endHour) {
+      current.setDate(current.getDate() + 1);
+      current.setHours(0, 0, 0, 0);
+      continue;
+    }
+
+    const endOfDay = new Date(current);
+    endOfDay.setHours(bd.endHour, 0, 0, 0);
+    const effectiveEnd = end < endOfDay ? end : endOfDay;
+    const minutes = (effectiveEnd.getTime() - current.getTime()) / (60 * 1000);
+    total += Math.max(0, minutes);
+
+    current.setDate(current.getDate() + 1);
+    current.setHours(0, 0, 0, 0);
+  }
+
+  return Math.round(total);
+}
+
 export function addBusinessMinutes(startUtc: Date, minutes: number): Date {
   let remaining = minutes;
   let current = utcToBrt(startUtc);

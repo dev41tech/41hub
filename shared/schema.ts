@@ -134,6 +134,8 @@ export const ticketCategories = pgTable("ticket_categories", {
   parentId: varchar("parent_id", { length: 36 }).references((): any => ticketCategories.id, { onDelete: "set null" }),
   isActive: boolean("is_active").notNull().default(true),
   descriptionTemplate: text("description_template"),
+  formSchema: jsonb("form_schema").$type<Array<{ key: string; label: string; type: string; required?: boolean; options?: string[] }>>(),
+  templateApplyMode: varchar("template_apply_mode", { length: 30 }).notNull().default("replace_if_empty"),
   createdBy: varchar("created_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
@@ -162,6 +164,8 @@ export const tickets = pgTable("tickets", {
   createdBy: varchar("created_by", { length: 36 }).notNull().references(() => users.id),
   relatedResourceId: varchar("related_resource_id", { length: 36 }).references(() => resources.id, { onDelete: "set null" }),
   tags: text("tags").array().default(sql`ARRAY[]::text[]`),
+  requestData: jsonb("request_data").$type<Record<string, any>>().default({}),
+  requestDataVersion: integer("request_data_version").notNull().default(1),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   closedAt: timestamp("closed_at"),
@@ -216,6 +220,8 @@ export const ticketSlaCycles = pgTable("ticket_sla_cycles", {
   resolutionDueAtManualReason: text("resolution_due_at_manual_reason"),
   resolutionDueAtUpdatedBy: varchar("resolution_due_at_updated_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
   resolutionDueAtUpdatedAt: timestamp("resolution_due_at_updated_at"),
+  pausedAt: timestamp("paused_at"),
+  pausedTotalBusinessMinutes: integer("paused_total_business_minutes").notNull().default(0),
 });
 
 // Ticket events (for metrics/history)

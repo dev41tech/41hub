@@ -22,7 +22,11 @@ Key features:
 - Light/dark theme support
 - Ticket/helpdesk module with SLA tracking, categories, comments, attachments
 - SLA manual deadline override per ticket (admin only)
-- Category description templates auto-filling ticket descriptions
+- SLA pause/resume: SLA pauses when ticket enters AGUARDANDO_USUARIO, resumes when leaving (pushes dueAt forward by paused business minutes)
+- Category description templates auto-filling ticket descriptions with placeholder support ({{field}})
+- Service Catalog: formSchema per category (dynamic form fields), requestData JSONB on tickets, templateApplyMode (replace_if_empty|always_replace|append)
+- Requerente displayed separately in ticket detail (not selectable as assignee); assignees restricted to Admin users only
+- SLA First Response: triggers on status change from ABERTO or first non-internal admin comment (not on assignee change)
 - In-app notification system with bell icon, unread count, per-type admin toggles
 - Notification dispatching on ticket create, comment, and status change
 - Admin "Configurações" panel with consolidated pages (users+password, tickets settings, notifications)

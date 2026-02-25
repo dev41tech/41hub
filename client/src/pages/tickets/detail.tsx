@@ -191,13 +191,7 @@ export default function TicketsDetail() {
   const assignableUsers = (() => {
     if (!ticket || !allUsers.length) return [];
     const isUserAdmin = (u: DirectoryUser) => u.isAdmin || u.roles?.some(r => r.roleName === "Admin");
-    const adminUsers = allUsers.filter(u => isUserAdmin(u));
-    const requester = allUsers.find(u => u.id === ticket.createdBy);
-    const result = adminUsers.map(u => ({ ...u, isAdmin: true }));
-    if (requester && !result.some(u => u.id === requester.id)) {
-      result.push({ ...requester, isAdmin: false });
-    }
-    return result;
+    return allUsers.filter(u => isUserAdmin(u));
   })();
 
   if (ticket && !assigneesInitialized && ticket.assignees) {
@@ -532,6 +526,12 @@ export default function TicketsDetail() {
                     Prazo ajustado manualmente
                   </Badge>
                 )}
+                {(ticket.currentCycle as any)?.pausedAt && (
+                  <Badge variant="secondary" className="text-xs flex items-center gap-1 w-fit bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200" data-testid="badge-sla-paused">
+                    <Clock className="h-3 w-3" />
+                    SLA pausado
+                  </Badge>
+                )}
                 <Separator />
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Ciclo</span>
@@ -546,6 +546,15 @@ export default function TicketsDetail() {
               <CardTitle className="text-base">Detalhes</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Requerente</span>
+                <span data-testid="text-requester">{ticket.creatorName} ({ticket.creatorEmail})</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Setor origem</span>
+                <span data-testid="text-requester-sector">{ticket.requesterSectorName}</span>
+              </div>
+              <Separator />
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Categoria</span>
                 <span>{ticket.categoryBranch}/{ticket.categoryName}</span>
@@ -566,6 +575,22 @@ export default function TicketsDetail() {
               )}
             </CardContent>
           </Card>
+
+          {ticket.requestData && Object.keys(ticket.requestData).length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Dados do chamado</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                {Object.entries(ticket.requestData).map(([key, value]) => (
+                  <div key={key} className="flex justify-between" data-testid={`request-data-${key}`}>
+                    <span className="text-muted-foreground capitalize">{key}</span>
+                    <span>{String(value)}</span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
 
           {isAdmin && (
             <Card>
@@ -626,12 +651,7 @@ export default function TicketsDetail() {
                             );
                           }}
                         />
-                        <span className="truncate">
-                          {u.name}
-                          {u.id === ticket.createdBy && !u.isAdmin && (
-                            <span className="ml-1 text-xs text-muted-foreground">(Requerente)</span>
-                          )}
-                        </span>
+                        <span className="truncate">{u.name}</span>
                       </label>
                     ))}
                   </div>

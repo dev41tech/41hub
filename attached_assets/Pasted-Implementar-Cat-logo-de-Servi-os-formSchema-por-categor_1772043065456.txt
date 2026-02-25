@@ -1,0 +1,157 @@
+Implementar Catálogo de Serviços (formSchema por categoria) + corrigir (A) campo Requerente e (B) SLA Primeira Resposta não ser marcado ao atribuir responsáveis.
+
+REGRAS GERAIS
+- Admin configura categorias/templates/formSchema.
+- Coordenador abre ticket apenas para TI e precisa preencher obrigatórios.
+- Usuário não cria nem comenta.
+- Não quebrar tickets existentes (requestData default {}).
+- Enforce no BACKEND (não só na UI).
+- `npm run check` deve passar.
+
+========================================================
+(A) CORREÇÃO: “Requerente” NÃO é responsável
+========================================================
+Objetivo: “Requerente” deve aparecer como campo próprio no detalhe do ticket, junto de “Setor origem”. E não pode mais ser selecionado na lista de responsáveis.
+
+BACKEND
+1) Ajustar regra de assignees:
+- Endpoint PUT /api/tickets/:id/assignees (admin only):
+  - Agora só aceitar userIds com role Admin.
+  - Remover a exceção que permitia selecionar createdBy.
+  - Se tentar enviar createdBy (ou qualquer não-admin), retornar 400.
+
+2) Ticket detail:
+- Garantir que GET /api/tickets/:id retorna explicitamente:
+  - requester: { id, name, email }
+  - requesterSector: { id, name }
+  - assignees: [{ id, name, email }]
+  (Se já retorna parcialmente, completar.)
+
+FRONTEND
+3) TicketDetail:
+- Criar um bloco no topo, acima de “Responsáveis”:
+  - “Requerente: <nome> (<email>)”
+  - “Setor origem: <setor>”
+- Em “Responsáveis”:
+  - mostrar apenas os admins selecionados.
+  - selector de responsáveis deve listar APENAS Admins.
+  - Remover qualquer opção “Requerente: ...” dentro do multi-select.
+
+========================================================
+(B) CORREÇÃO: SLA Primeira Resposta não deve mudar ao atribuir responsável
+========================================================
+Hoje você está setando firstResponseAt quando define assignees. Isso não faz sentido no seu fluxo.
+
+Nova regra (mais lógica para vocês):
+- Primeira Resposta = quando um Admin faz uma ação “visível”/operacional no ticket:
+  - (1) muda status de ABERTO -> EM_ANDAMENTO (ou -> AGUARDANDO_USUARIO/RESOLVIDO)
+  OU
+  - (2) adiciona o PRIMEIRO comentário NÃO-interno (isInternal=false)
+- Atribuir responsáveis NÃO marca primeira resposta.
+
+BACKEND
+1) PUT /assignees:
+- Remover qualquer lógica que seta firstResponseAt ou altera SLA ao atribuir.
+
+2) PATCH /api/tickets/:id (admin only):
+- Quando status mudar e cycle.firstResponseAt estiver null:
+  - se status novo != ABERTO, set cycle.firstResponseAt = now
+  - calcular breach firstResponseBreached comparando now com firstResponseDueAt
+
+3) POST /api/tickets/:id/comments:
+- Se comment.isInternal == false e actor é admin e cycle.firstResponseAt == null:
+  - set firstResponseAt = now (mesma regra de breach)
+
+FRONTEND
+4) Badge “Primeira resposta: pendente/respondido”
+- Ajustar para refletir apenas cycle.firstResponseAt (não depender de assignees)
+
+========================================================
+(1) CATÁLOGO DE SERVIÇOS: formSchema + requestData + template
+========================================================
+DB (shared/schema.ts)
+1) ticket_categories:
+- adicionar:
+  - formSchema jsonb nullable
+  - templateApplyMode varchar default "replace_if_empty"  // replace_if_empty|always_replace|append
+
+2) tickets:
+- adicionar:
+  - requestData jsonb default {}
+  - requestDataVersion int default 1
+
+3) ticket_sla_cycles:
+- adicionar (para pause/resume):
+  - pausedAt timestamp nullable
+  - pausedTotalBusinessMinutes int default 0
+
+Rodar drizzle push.
+
+BACKEND
+4) SLA pause/resume em horas úteis
+- Em server/lib/sla.ts:
+  - manter addBusinessMinutes
+  - criar businessMinutesBetween(start, end)
+- Ao entrar em AGUARDANDO_USUARIO:
+  - cycle.pausedAt = now (se ainda null)
+- Ao sair de AGUARDANDO_USUARIO:
+  - paused = businessMinutesBetween(pausedAt, now)
+  - cycle.pausedTotalBusinessMinutes += paused
+  - empurrar dueAt:
+    - cycle.firstResponseDueAt = addBusinessMinutes(cycle.firstResponseDueAt, paused)
+    - cycle.resolutionDueAt = addBusinessMinutes(cycle.resolutionDueAt, paused)
+  - cycle.pausedAt = null
+- UI pode mostrar badge “SLA pausado” se pausedAt != null.
+
+5) Template com placeholders
+- helper applyTemplate("Nome: {{nome}}", requestData)
+- No createTicket:
+  - Se description vazia e houver template: aplicar template (replace_if_empty)
+  - Se append: concatenar
+  - Se always_replace: substituir sempre
+
+6) Validação de obrigatórios (OBRIGATÓRIO)
+- POST /api/tickets:
+  - carregar category
+  - exigir que seja LEAF (parentId != null)
+  - se category.formSchema existir:
+    - validar requestData contém todos required com valor não vazio
+    - se faltar: 400 com missing: ["nome","email"]
+  - salvar requestData no ticket
+
+7) Admin: editar formSchema e template
+- PATCH /api/admin/tickets/categories/:id aceitar:
+  - formSchema
+  - descriptionTemplate
+  - templateApplyMode
+  - isActive toggle
+
+FRONTEND
+8) AdminTicketCategories: editor simples de formSchema
+- Para LEAF:
+  - seção “Formulário da categoria”
+  - UI simples:
+    - listar fields (key,label,type,required)
+    - modal “Adicionar campo”
+    - botão salvar
+  - opcional: “Modo JSON” (textarea) com validação
+
+9) TicketNew: renderizar formulário dinamicamente
+- Ao escolher categoria:
+  - renderizar campos do schema (text/email/password/textarea/select/number)
+  - montar requestData
+  - se description vazia, aplicar template automaticamente
+- Ao submit:
+  - enviar requestData + description
+
+10) TicketDetail: exibir requestData
+- Card “Dados do chamado” com key/valor (read-only)
+- (Não precisa editar agora)
+
+CHECKLIST
+- Requerente aparece separado e não pode ser selecionado como responsável.
+- Assignees só admins.
+- FirstResponse não muda ao atribuir; só muda ao trocar status de ABERTO para outro OU ao comentar (não-interno).
+- Coordenador abre ticket com formulário; obrigatórios validados.
+- SLA pausa em AGUARDANDO_USUARIO e empurra dueAt ao retomar.
+- npm run check ok.

@@ -55,6 +55,7 @@ export default function TicketsNew() {
   const [priority, setPriority] = useState("MEDIA");
   const [showTemplateConfirm, setShowTemplateConfirm] = useState(false);
   const pendingTemplate = useRef("");
+  const [requestData, setRequestData] = useState<Record<string, string>>({});
 
   const { data: adminSectors = [] } = useQuery<Sector[]>({
     queryKey: ["/api/admin/sectors"],
@@ -110,6 +111,7 @@ export default function TicketsNew() {
 
   function handleCategoryChange(newCategoryId: string) {
     setCategoryId(newCategoryId);
+    setRequestData({});
     const cat = allCategories.find(c => c.id === newCategoryId);
     const template = (cat as any)?.descriptionTemplate || "";
     if (template) {
@@ -118,6 +120,9 @@ export default function TicketsNew() {
       }
     }
   }
+
+  const selectedFormSchema: Array<{ key: string; label: string; type: string; required?: boolean; options?: string[] }> =
+    (selectedCategory as any)?.formSchema || [];
 
   function handleInsertTemplate() {
     if (description.trim()) {
@@ -131,13 +136,17 @@ export default function TicketsNew() {
   const createMutation = useMutation({
     mutationFn: async () => {
       const sectorId = requesterSectorId || (availableSectors.length === 1 ? availableSectors[0].id : "");
-      const res = await apiRequest("POST", "/api/tickets", {
+      const payload: Record<string, any> = {
         title,
         description,
         requesterSectorId: sectorId,
         categoryId,
         priority,
-      });
+      };
+      if (selectedFormSchema.length > 0) {
+        payload.requestData = requestData;
+      }
+      const res = await apiRequest("POST", "/api/tickets", payload);
       return res.json();
     },
     onSuccess: (data) => {
@@ -285,6 +294,51 @@ export default function TicketsNew() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {selectedFormSchema.length > 0 && (
+                <Card className="border-primary/20 bg-primary/5">
+                  <CardContent className="p-4 space-y-3">
+                    <p className="text-sm font-medium">Dados do serviço</p>
+                    {selectedFormSchema.map(field => (
+                      <div key={field.key} className="space-y-1">
+                        <Label className="text-sm">
+                          {field.label}
+                          {field.required && <span className="text-destructive ml-1">*</span>}
+                        </Label>
+                        {field.type === "textarea" ? (
+                          <Textarea
+                            value={requestData[field.key] || ""}
+                            onChange={e => setRequestData(prev => ({ ...prev, [field.key]: e.target.value }))}
+                            rows={3}
+                            data-testid={`field-${field.key}`}
+                          />
+                        ) : field.type === "select" && field.options ? (
+                          <Select
+                            value={requestData[field.key] || ""}
+                            onValueChange={v => setRequestData(prev => ({ ...prev, [field.key]: v }))}
+                          >
+                            <SelectTrigger data-testid={`field-${field.key}`}>
+                              <SelectValue placeholder="Selecione..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {field.options.map(opt => (
+                                <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input
+                            type={field.type === "email" ? "email" : field.type === "number" ? "number" : "text"}
+                            value={requestData[field.key] || ""}
+                            onChange={e => setRequestData(prev => ({ ...prev, [field.key]: e.target.value }))}
+                            data-testid={`field-${field.key}`}
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
 
               <div className="space-y-2">
                 <Label htmlFor="title">Título</Label>

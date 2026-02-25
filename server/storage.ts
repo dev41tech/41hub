@@ -68,7 +68,7 @@ import {
   type TypingSession,
   type TypingScore,
 } from "@shared/schema";
-import { computeSlaDueDates } from "./lib/sla";
+import { computeSlaDueDates, addBusinessMinutes, businessMinutesBetween } from "./lib/sla";
 
 export interface IStorage {
   // Users
@@ -188,6 +188,7 @@ export interface IStorage {
     priority?: "BAIXA" | "MEDIA" | "ALTA" | "URGENTE";
     relatedResourceId?: string;
     tags?: string[];
+    requestData?: Record<string, any>;
   }, actorUser: UserWithRoles): Promise<Ticket>;
 
   listTicketsForUser(user: UserWithRoles, filters: {
@@ -965,6 +966,7 @@ export class DatabaseStorage implements IStorage {
     priority?: "BAIXA" | "MEDIA" | "ALTA" | "URGENTE";
     relatedResourceId?: string;
     tags?: string[];
+    requestData?: Record<string, any>;
   }, actorUser: UserWithRoles): Promise<Ticket> {
     const targetSectorName = process.env.TICKETS_TARGET_SECTOR_NAME || "Tech";
     const targetSector = await this.getSectorByName(targetSectorName);
@@ -983,6 +985,7 @@ export class DatabaseStorage implements IStorage {
       createdBy: actorUser.id,
       relatedResourceId: data.relatedResourceId || null,
       tags: data.tags || [],
+      requestData: data.requestData || {},
     }).returning();
 
     const now = new Date();
@@ -1149,6 +1152,21 @@ export class DatabaseStorage implements IStorage {
     if (patch.status !== undefined) updateData.status = patch.status;
 
     if (patch.status && patch.status !== existing.status) {
+      if (existing.status === "ABERTO" && patch.status !== "ABERTO") {
+        const [cycle] = await db.select().from(ticketSlaCycles)
+          .where(eq(ticketSlaCycles.ticketId, ticketId))
+          .orderBy(desc(ticketSlaCycles.cycleNumber))
+          .limit(1);
+        if (cycle && !cycle.firstResponseAt) {
+          const now = new Date();
+          const breached = now > cycle.firstResponseDueAt;
+          await db.update(ticketSlaCycles).set({
+            firstResponseAt: now,
+            firstResponseBreached: breached,
+          }).where(eq(ticketSlaCycles.id, cycle.id));
+        }
+      }
+
       if (patch.status === "RESOLVIDO") {
         updateData.closedAt = new Date();
         const [cycle] = await db.select().from(ticketSlaCycles)
@@ -1191,6 +1209,34 @@ export class DatabaseStorage implements IStorage {
           ticketId, actorUserId: actorUser.id, type: "status_changed",
           data: { from: existing.status, to: patch.status },
         });
+      }
+
+      const [slaCycle] = await db.select().from(ticketSlaCycles)
+        .where(eq(ticketSlaCycles.ticketId, ticketId))
+        .orderBy(desc(ticketSlaCycles.cycleNumber))
+        .limit(1);
+
+      if (slaCycle) {
+        if (patch.status === "AGUARDANDO_USUARIO" && !slaCycle.pausedAt) {
+          await db.update(ticketSlaCycles).set({
+            pausedAt: new Date(),
+          }).where(eq(ticketSlaCycles.id, slaCycle.id));
+        } else if (existing.status === "AGUARDANDO_USUARIO" && patch.status !== "AGUARDANDO_USUARIO" && slaCycle.pausedAt) {
+          const now = new Date();
+          const pausedMinutes = businessMinutesBetween(slaCycle.pausedAt, now);
+          const newTotal = slaCycle.pausedTotalBusinessMinutes + pausedMinutes;
+          const updates: any = {
+            pausedAt: null,
+            pausedTotalBusinessMinutes: newTotal,
+          };
+          if (!slaCycle.resolutionDueAtManual) {
+            updates.resolutionDueAt = addBusinessMinutes(slaCycle.resolutionDueAt, pausedMinutes);
+          }
+          if (!slaCycle.firstResponseAt) {
+            updates.firstResponseDueAt = addBusinessMinutes(slaCycle.firstResponseDueAt, pausedMinutes);
+          }
+          await db.update(ticketSlaCycles).set(updates).where(eq(ticketSlaCycles.id, slaCycle.id));
+        }
       }
     }
 
@@ -1240,21 +1286,6 @@ export class DatabaseStorage implements IStorage {
       });
     }
 
-    if (toAdd.length > 0) {
-      const [cycle] = await db.select().from(ticketSlaCycles)
-        .where(eq(ticketSlaCycles.ticketId, ticketId))
-        .orderBy(desc(ticketSlaCycles.cycleNumber))
-        .limit(1);
-      if (cycle && !cycle.firstResponseAt) {
-        const now = new Date();
-        const breached = now > cycle.firstResponseDueAt;
-        await db.update(ticketSlaCycles).set({
-          firstResponseAt: now,
-          firstResponseBreached: breached,
-        }).where(eq(ticketSlaCycles.id, cycle.id));
-      }
-    }
-
     await db.insert(ticketEvents).values({
       ticketId, actorUserId: actorUser.id, type: "assignees_changed",
       data: { assigneeIds, added: toAdd, removed: toRemove },
@@ -1292,7 +1323,7 @@ export class DatabaseStorage implements IStorage {
       isInternal: authorUser.isAdmin ? (data.isInternal || false) : false,
     }).returning();
 
-    if (authorUser.isAdmin) {
+    if (authorUser.isAdmin && !comment.isInternal) {
       const [cycle] = await db.select().from(ticketSlaCycles)
         .where(eq(ticketSlaCycles.ticketId, ticketId))
         .orderBy(desc(ticketSlaCycles.cycleNumber))

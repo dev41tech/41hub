@@ -48,6 +48,14 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
   const [parentId, setParentId] = useState<string>("none");
   const [descriptionTemplate, setDescriptionTemplate] = useState("");
   const [showInactive, setShowInactive] = useState(false);
+  const [formFields, setFormFields] = useState<Array<{ key: string; label: string; type: string; required: boolean; options?: string[] }>>([]);
+  const [templateApplyMode, setTemplateApplyMode] = useState("replace_if_empty");
+  const [newFieldKey, setNewFieldKey] = useState("");
+  const [newFieldLabel, setNewFieldLabel] = useState("");
+  const [newFieldType, setNewFieldType] = useState("text");
+  const [newFieldRequired, setNewFieldRequired] = useState(false);
+  const [newFieldOptions, setNewFieldOptions] = useState("");
+  const [showAddField, setShowAddField] = useState(false);
 
   const { data: categories = [], isLoading } = useQuery<TicketCategory[]>({
     queryKey: ["/api/admin/tickets/categories"],
@@ -68,6 +76,8 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
           payload.parentId = parentId === "none" ? null : parentId;
           const parent = parentId !== "none" ? categories.find(c => c.id === parentId) : null;
           if (parent) payload.branch = parent.branch;
+          payload.formSchema = formFields.length > 0 ? formFields : null;
+          payload.templateApplyMode = templateApplyMode;
         }
         return (await apiRequest("PATCH", `/api/admin/tickets/categories/${editing.id}`, payload)).json();
       }
@@ -114,6 +124,14 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
     setBranch("");
     setParentId("none");
     setDescriptionTemplate("");
+    setFormFields([]);
+    setTemplateApplyMode("replace_if_empty");
+    setShowAddField(false);
+    setNewFieldKey("");
+    setNewFieldLabel("");
+    setNewFieldType("text");
+    setNewFieldRequired(false);
+    setNewFieldOptions("");
   }
 
   function openCreateBranch() {
@@ -138,7 +156,36 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
     setBranch(cat.branch);
     setParentId(cat.parentId || "none");
     setDescriptionTemplate(cat.descriptionTemplate || "");
+    setFormFields(((cat as any).formSchema || []).map((f: any) => ({ ...f, required: f.required ?? false })));
+    setTemplateApplyMode((cat as any).templateApplyMode || "replace_if_empty");
+    setShowAddField(false);
     setDialogOpen(true);
+  }
+
+  function addFormField() {
+    if (!newFieldKey.trim() || !newFieldLabel.trim()) return;
+    setFormFields(prev => [
+      ...prev,
+      {
+        key: newFieldKey.trim(),
+        label: newFieldLabel.trim(),
+        type: newFieldType,
+        required: newFieldRequired,
+        ...(newFieldType === "select" && newFieldOptions.trim()
+          ? { options: newFieldOptions.split(",").map(o => o.trim()).filter(Boolean) }
+          : {}),
+      },
+    ]);
+    setNewFieldKey("");
+    setNewFieldLabel("");
+    setNewFieldType("text");
+    setNewFieldRequired(false);
+    setNewFieldOptions("");
+    setShowAddField(false);
+  }
+
+  function removeFormField(key: string) {
+    setFormFields(prev => prev.filter(f => f.key !== key));
   }
 
   const filteredCategories = showInactive
@@ -234,6 +281,7 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
                   <TableHead>Nome</TableHead>
                   <TableHead>Tipo</TableHead>
                   <TableHead>Template</TableHead>
+                  <TableHead>Formulário</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Ações</TableHead>
                 </TableRow>
@@ -259,6 +307,13 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
                       <TableCell>
                         {cat.descriptionTemplate ? (
                           <Badge variant="secondary" className="text-xs">Sim</Badge>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {(cat as any).formSchema && (cat as any).formSchema.length > 0 ? (
+                          <Badge variant="secondary" className="text-xs">{(cat as any).formSchema.length} campos</Badge>
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
                         )}
@@ -360,6 +415,98 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
                 data-testid="input-description-template"
               />
             </div>
+
+            {((editing && editing.parentId) || dialogMode === "subcategory") && (
+              <>
+                <div className="space-y-2">
+                  <Label>Modo do template</Label>
+                  <Select value={templateApplyMode} onValueChange={setTemplateApplyMode}>
+                    <SelectTrigger data-testid="select-template-mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="replace_if_empty">Substituir se vazio</SelectItem>
+                      <SelectItem value="always_replace">Substituir sempre</SelectItem>
+                      <SelectItem value="append">Concatenar</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Formulário da categoria</Label>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setShowAddField(!showAddField)} data-testid="button-toggle-add-field">
+                      <Plus className="h-3 w-3 mr-1" />
+                      Campo
+                    </Button>
+                  </div>
+
+                  {formFields.length > 0 && (
+                    <div className="space-y-1">
+                      {formFields.map(f => (
+                        <div key={f.key} className="flex items-center justify-between border rounded px-2 py-1 text-sm">
+                          <div>
+                            <span className="font-medium">{f.label}</span>
+                            <span className="text-muted-foreground ml-1">({f.type})</span>
+                            {f.required && <Badge variant="destructive" className="ml-1 text-xs">obr.</Badge>}
+                          </div>
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => removeFormField(f.key)} data-testid={`remove-field-${f.key}`}>
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {showAddField && (
+                    <div className="border rounded-lg p-3 space-y-2 bg-muted/50">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">Chave</Label>
+                          <Input value={newFieldKey} onChange={e => setNewFieldKey(e.target.value)} placeholder="nome_campo" className="h-8" data-testid="input-field-key" />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Rótulo</Label>
+                          <Input value={newFieldLabel} onChange={e => setNewFieldLabel(e.target.value)} placeholder="Nome do Campo" className="h-8" data-testid="input-field-label" />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">Tipo</Label>
+                          <Select value={newFieldType} onValueChange={setNewFieldType}>
+                            <SelectTrigger className="h-8" data-testid="select-field-type">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="text">Texto</SelectItem>
+                              <SelectItem value="email">Email</SelectItem>
+                              <SelectItem value="number">Número</SelectItem>
+                              <SelectItem value="textarea">Texto longo</SelectItem>
+                              <SelectItem value="select">Seleção</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="flex items-end gap-2">
+                          <label className="flex items-center gap-1 text-xs cursor-pointer pb-2">
+                            <Switch checked={newFieldRequired} onCheckedChange={setNewFieldRequired} />
+                            Obrigatório
+                          </label>
+                        </div>
+                      </div>
+                      {newFieldType === "select" && (
+                        <div>
+                          <Label className="text-xs">Opções (separar por vírgula)</Label>
+                          <Input value={newFieldOptions} onChange={e => setNewFieldOptions(e.target.value)} placeholder="Opção 1, Opção 2, Opção 3" className="h-8" data-testid="input-field-options" />
+                        </div>
+                      )}
+                      <Button type="button" size="sm" onClick={addFormField} disabled={!newFieldKey.trim() || !newFieldLabel.trim()} data-testid="button-add-field">
+                        Adicionar campo
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>

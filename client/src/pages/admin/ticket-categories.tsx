@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -40,6 +41,7 @@ export default function AdminTicketCategories() {
   const [name, setName] = useState("");
   const [branch, setBranch] = useState<string>("INFRA");
   const [parentId, setParentId] = useState<string>("none");
+  const [descriptionTemplate, setDescriptionTemplate] = useState("");
 
   const { data: categories = [], isLoading } = useQuery<TicketCategory[]>({
     queryKey: ["/api/admin/tickets/categories"],
@@ -49,14 +51,16 @@ export default function AdminTicketCategories() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
+      const payload: any = {
+        name,
+        branch,
+        parentId: parentId === "none" ? null : parentId,
+        descriptionTemplate: descriptionTemplate || null,
+      };
       if (editing) {
-        return (await apiRequest("PATCH", `/api/admin/tickets/categories/${editing.id}`, {
-          name, branch, parentId: parentId === "none" ? null : parentId,
-        })).json();
+        return (await apiRequest("PATCH", `/api/admin/tickets/categories/${editing.id}`, payload)).json();
       }
-      return (await apiRequest("POST", "/api/admin/tickets/categories", {
-        name, branch, parentId: parentId === "none" ? null : parentId,
-      })).json();
+      return (await apiRequest("POST", "/api/admin/tickets/categories", payload)).json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/tickets/categories"] });
@@ -86,6 +90,7 @@ export default function AdminTicketCategories() {
     setName("");
     setBranch("INFRA");
     setParentId("none");
+    setDescriptionTemplate("");
   }
 
   function openCreate() {
@@ -98,8 +103,23 @@ export default function AdminTicketCategories() {
     setName(cat.name);
     setBranch(cat.branch);
     setParentId(cat.parentId || "none");
+    setDescriptionTemplate((cat as any).descriptionTemplate || "");
     setDialogOpen(true);
   }
+
+  const sortedCategories = [...categories].sort((a, b) => {
+    if (!a.parentId && !b.parentId) return a.branch.localeCompare(b.branch) || a.name.localeCompare(b.name);
+    if (!a.parentId) return -1;
+    if (!b.parentId) return 1;
+    const rootA = categories.find(c => c.id === a.parentId);
+    const rootB = categories.find(c => c.id === b.parentId);
+    if (rootA && rootB) {
+      const branchCmp = rootA.branch.localeCompare(rootB.branch);
+      if (branchCmp !== 0) return branchCmp;
+      return rootA.name.localeCompare(rootB.name) || a.name.localeCompare(b.name);
+    }
+    return 0;
+  });
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -135,12 +155,13 @@ export default function AdminTicketCategories() {
                   <TableHead>Nome</TableHead>
                   <TableHead>Branch</TableHead>
                   <TableHead>Tipo</TableHead>
+                  <TableHead>Template</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {categories.map(cat => (
+                {sortedCategories.map(cat => (
                   <TableRow key={cat.id} data-testid={`category-${cat.id}`}>
                     <TableCell className={cat.parentId ? "pl-8" : "font-medium"}>
                       {cat.parentId ? "└ " : ""}{cat.name}
@@ -149,6 +170,13 @@ export default function AdminTicketCategories() {
                       <Badge variant="outline">{cat.branch}</Badge>
                     </TableCell>
                     <TableCell>{cat.parentId ? "Subcategoria" : "Raiz"}</TableCell>
+                    <TableCell>
+                      {(cat as any).descriptionTemplate ? (
+                        <Badge variant="secondary" className="text-xs">Sim</Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <Badge variant={cat.isActive ? "default" : "secondary"}>
                         {cat.isActive ? "Ativa" : "Inativa"}
@@ -209,10 +237,20 @@ export default function AdminTicketCategories() {
                 <SelectContent>
                   <SelectItem value="none">Nenhuma (raiz)</SelectItem>
                   {roots.map(r => (
-                    <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+                    <SelectItem key={r.id} value={r.id}>{r.name} ({r.branch})</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Template de Descrição (opcional)</Label>
+              <Textarea
+                value={descriptionTemplate}
+                onChange={(e) => setDescriptionTemplate(e.target.value)}
+                placeholder="Template que será preenchido automaticamente ao selecionar esta categoria..."
+                rows={4}
+                data-testid="input-description-template"
+              />
             </div>
           </div>
           <DialogFooter>

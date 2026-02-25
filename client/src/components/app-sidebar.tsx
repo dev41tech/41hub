@@ -49,7 +49,7 @@ export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout, isAuthenticated } = useAuth();
 
-  const isAdmin = user?.isAdmin || user?.roles?.some(r => r.roleName === "Admin" || r.roleName === "Coordenador");
+  const isAdmin = user?.isAdmin;
 
   const getInitials = (name: string) => {
     return name

@@ -20,6 +20,9 @@ Key features:
 - Admin dashboard with activity logs and summary metrics
 - Audit logging for security compliance
 - Light/dark theme support
+- Ticket/helpdesk module with SLA tracking, categories, comments, attachments
+- SLA manual deadline override per ticket (admin only)
+- Category description templates auto-filling ticket descriptions
 
 ## User Preferences
 

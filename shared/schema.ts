@@ -133,6 +133,7 @@ export const ticketCategories = pgTable("ticket_categories", {
   branch: ticketCategoryBranchEnum("branch").notNull(),
   parentId: varchar("parent_id", { length: 36 }).references((): any => ticketCategories.id, { onDelete: "set null" }),
   isActive: boolean("is_active").notNull().default(true),
+  descriptionTemplate: text("description_template"),
   createdBy: varchar("created_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
@@ -211,6 +212,10 @@ export const ticketSlaCycles = pgTable("ticket_sla_cycles", {
   resolvedAt: timestamp("resolved_at"),
   firstResponseBreached: boolean("first_response_breached").notNull().default(false),
   resolutionBreached: boolean("resolution_breached").notNull().default(false),
+  resolutionDueAtManual: boolean("resolution_due_at_manual").notNull().default(false),
+  resolutionDueAtManualReason: text("resolution_due_at_manual_reason"),
+  resolutionDueAtUpdatedBy: varchar("resolution_due_at_updated_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  resolutionDueAtUpdatedAt: timestamp("resolution_due_at_updated_at"),
 });
 
 // Ticket events (for metrics/history)

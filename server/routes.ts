@@ -1247,6 +1247,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         tags: z.array(z.string()).optional(),
         title: z.string().min(1).max(255).optional(),
         description: z.string().min(1).optional(),
+        resolutionDueAtManual: z.string().optional(),
+        resolutionDueAtManualReason: z.string().optional(),
       });
 
       const parsed = patchSchema.safeParse(req.body);
@@ -1254,7 +1256,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
       }
 
-      const updated = await storage.adminUpdateTicket(req.params.id, parsed.data, req.user!);
+      const { resolutionDueAtManual, resolutionDueAtManualReason, ...ticketPatch } = parsed.data;
+
+      if (resolutionDueAtManual) {
+        await storage.updateSlaCycleDeadline(req.params.id, {
+          resolutionDueAt: new Date(resolutionDueAtManual),
+          reason: resolutionDueAtManualReason,
+          updatedBy: req.user!.id,
+        });
+      }
+
+      const updated = await storage.adminUpdateTicket(req.params.id, ticketPatch, req.user!);
       if (!updated) return res.status(404).json({ error: "Chamado não encontrado" });
       res.json(updated);
     } catch (error: any) {
@@ -1270,6 +1282,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!parsed.success) {
         return res.status(400).json({ error: "Dados inválidos" });
       }
+
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+
+      const adminUsers = await storage.getAdminUserIds();
+      for (const aid of parsed.data.assigneeIds) {
+        if (!adminUsers.includes(aid) && aid !== ticket.createdBy) {
+          return res.status(400).json({ error: `Responsável ${aid} deve ser admin ou o requerente do chamado` });
+        }
+      }
+
       await storage.adminSetAssignees(req.params.id, parsed.data.assigneeIds, req.user!);
       res.json({ success: true });
     } catch (error: any) {
@@ -1292,6 +1315,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/tickets/:id/comments", requireAuth, async (req, res) => {
     try {
+      const isUser = !req.user!.isAdmin && !req.user!.roles?.some(r => r.roleName === "Coordenador");
+      if (isUser) {
+        return res.status(403).json({ error: "Usuários não podem comentar em chamados" });
+      }
+
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);
       if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
 
@@ -1326,6 +1354,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/tickets/:id/attachments", requireAuth, ticketUpload.single("file"), async (req, res) => {
     try {
+      const isUser = !req.user!.isAdmin && !req.user!.roles?.some(r => r.roleName === "Coordenador");
+      if (isUser) {
+        return res.status(403).json({ error: "Usuários não podem enviar anexos" });
+      }
+
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);
       if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
 
@@ -1422,6 +1455,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         branch: z.enum(["INFRA", "DEV", "SUPORTE"]).optional(),
         parentId: z.string().nullable().optional(),
         isActive: z.boolean().optional(),
+        descriptionTemplate: z.string().nullable().optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) {

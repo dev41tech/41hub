@@ -207,6 +207,9 @@ export interface IStorage {
 
   listTicketComments(ticketId: string, user: UserWithRoles): Promise<(TicketComment & { authorName?: string; authorEmail?: string })[]>;
   listTicketAttachments(ticketId: string, user: UserWithRoles): Promise<TicketAttachment[]>;
+
+  getAdminUserIds(): Promise<string[]>;
+  updateSlaCycleDeadline(ticketId: string, data: { resolutionDueAt: Date; reason?: string; updatedBy: string }): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1010,7 +1013,9 @@ export class DatabaseStorage implements IStorage {
 
     if (filters.status) {
       conditions.push(eq(tickets.status, filters.status as any));
-    } else if (!filters.includeClosed) {
+    } else if (filters.includeClosed) {
+      conditions.push(inArray(tickets.status, ["RESOLVIDO", "CANCELADO"]));
+    } else {
       conditions.push(inArray(tickets.status, ["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO"]));
     }
 
@@ -1313,6 +1318,31 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(ticketAttachments)
       .where(eq(ticketAttachments.ticketId, ticketId))
       .orderBy(asc(ticketAttachments.createdAt));
+  }
+
+  async getAdminUserIds(): Promise<string[]> {
+    const adminRole = await db.select().from(roles).where(eq(roles.name, "Admin")).limit(1);
+    if (!adminRole.length) return [];
+    const adminAssignments = await db.select({ userId: userSectorRoles.userId })
+      .from(userSectorRoles)
+      .where(eq(userSectorRoles.roleId, adminRole[0].id));
+    return [...new Set(adminAssignments.map(a => a.userId))];
+  }
+
+  async updateSlaCycleDeadline(ticketId: string, data: { resolutionDueAt: Date; reason?: string; updatedBy: string }): Promise<void> {
+    const [cycle] = await db.select().from(ticketSlaCycles)
+      .where(eq(ticketSlaCycles.ticketId, ticketId))
+      .orderBy(desc(ticketSlaCycles.cycleNumber))
+      .limit(1);
+    if (!cycle) throw new Error("SLA cycle not found");
+
+    await db.update(ticketSlaCycles).set({
+      resolutionDueAt: data.resolutionDueAt,
+      resolutionDueAtManual: true,
+      resolutionDueAtManualReason: data.reason || null,
+      resolutionDueAtUpdatedBy: data.updatedBy,
+      resolutionDueAtUpdatedAt: new Date(),
+    }).where(eq(ticketSlaCycles.id, cycle.id));
   }
 }
 

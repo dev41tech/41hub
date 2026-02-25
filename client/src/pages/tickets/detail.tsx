@@ -19,6 +19,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
   ArrowLeft,
   Clock,
   MessageSquare,
@@ -28,6 +35,8 @@ import {
   Loader2,
   Users,
   Send,
+  Pencil,
+  AlertTriangle,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -118,6 +127,8 @@ interface DirectoryUser {
   id: string;
   name: string;
   email: string;
+  roles?: Array<{ sectorId: string; sectorName: string; roleName: string }>;
+  isAdmin?: boolean;
 }
 
 export default function TicketsDetail() {
@@ -126,11 +137,16 @@ export default function TicketsDetail() {
   const { user } = useAuth();
   const { toast } = useToast();
   const isAdmin = user?.isAdmin;
+  const isCoordinator = user?.roles?.some(r => r.roleName === "Coordenador");
+  const isUserRole = !isAdmin && !isCoordinator;
 
   const [commentBody, setCommentBody] = useState("");
   const [isInternal, setIsInternal] = useState(false);
   const [selectedAssignees, setSelectedAssignees] = useState<string[]>([]);
   const [assigneesInitialized, setAssigneesInitialized] = useState(false);
+  const [deadlineDialogOpen, setDeadlineDialogOpen] = useState(false);
+  const [newDeadline, setNewDeadline] = useState("");
+  const [deadlineReason, setDeadlineReason] = useState("");
 
   const { data: ticket, isLoading } = useQuery<TicketWithDetails>({
     queryKey: ["/api/tickets", ticketId],
@@ -162,8 +178,8 @@ export default function TicketsDetail() {
     enabled: !!ticketId,
   });
 
-  const { data: techUsers = [] } = useQuery<DirectoryUser[]>({
-    queryKey: ["/api/users/directory", "tech"],
+  const { data: allUsers = [] } = useQuery<DirectoryUser[]>({
+    queryKey: ["/api/users/directory", "all"],
     queryFn: async () => {
       const res = await fetch("/api/users/directory?all=true", { credentials: "include" });
       if (!res.ok) throw new Error("Failed");
@@ -171,6 +187,18 @@ export default function TicketsDetail() {
     },
     enabled: !!isAdmin,
   });
+
+  const assignableUsers = (() => {
+    if (!ticket || !allUsers.length) return [];
+    const isUserAdmin = (u: DirectoryUser) => u.isAdmin || u.roles?.some(r => r.roleName === "Admin");
+    const adminUsers = allUsers.filter(u => isUserAdmin(u));
+    const requester = allUsers.find(u => u.id === ticket.createdBy);
+    const result = adminUsers.map(u => ({ ...u, isAdmin: true }));
+    if (requester && !result.some(u => u.id === requester.id)) {
+      result.push({ ...requester, isAdmin: false });
+    }
+    return result;
+  })();
 
   if (ticket && !assigneesInitialized && ticket.assignees) {
     setSelectedAssignees(ticket.assignees.map(a => a.userId));
@@ -247,7 +275,18 @@ export default function TicketsDetail() {
     },
   });
 
-  const canComment = isAdmin || ticket?.status === "AGUARDANDO_USUARIO";
+  const canComment = !isUserRole && (isAdmin || ticket?.status === "AGUARDANDO_USUARIO");
+
+  function handleSaveDeadline() {
+    if (!newDeadline) return;
+    updateMutation.mutate({
+      resolutionDueAtManual: new Date(newDeadline).toISOString(),
+      resolutionDueAtManualReason: deadlineReason || undefined,
+    });
+    setDeadlineDialogOpen(false);
+    setNewDeadline("");
+    setDeadlineReason("");
+  }
 
   if (isLoading) {
     return (
@@ -266,6 +305,7 @@ export default function TicketsDetail() {
   }
 
   const slaInfo = getSlaInfo(ticket.currentCycle);
+  const isManualDeadline = (ticket.currentCycle as any)?.resolutionDueAtManual;
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -465,14 +505,33 @@ export default function TicketsDetail() {
                   <span className="text-xs">{formatDate(slaInfo.cycle.firstResponseDueAt)}</span>
                 </div>
                 <Separator />
-                <div className="flex justify-between">
+                <div className="flex justify-between items-center">
                   <span className="text-muted-foreground">Resolução</span>
                   <span className={`font-medium ${slaInfo.resColor}`}>{slaInfo.resStatus}</span>
                 </div>
-                <div className="flex justify-between">
+                <div className="flex justify-between items-center">
                   <span className="text-muted-foreground">Prazo resolução</span>
-                  <span className="text-xs">{formatDate(slaInfo.cycle.resolutionDueAt)}</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs">{formatDate(slaInfo.cycle.resolutionDueAt)}</span>
+                    {isAdmin && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-5 w-5"
+                        onClick={() => setDeadlineDialogOpen(true)}
+                        data-testid="button-edit-deadline"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
+                {isManualDeadline && (
+                  <Badge variant="outline" className="text-xs flex items-center gap-1 w-fit" data-testid="badge-manual-deadline">
+                    <AlertTriangle className="h-3 w-3" />
+                    Prazo ajustado manualmente
+                  </Badge>
+                )}
                 <Separator />
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Ciclo</span>
@@ -557,7 +616,7 @@ export default function TicketsDetail() {
                     Responsáveis
                   </Label>
                   <div className="max-h-40 overflow-y-auto space-y-1 border rounded-lg p-2">
-                    {techUsers.map((u) => (
+                    {assignableUsers.map((u) => (
                       <label key={u.id} className="flex items-center gap-2 text-sm cursor-pointer py-1">
                         <Checkbox
                           checked={selectedAssignees.includes(u.id)}
@@ -567,7 +626,12 @@ export default function TicketsDetail() {
                             );
                           }}
                         />
-                        <span className="truncate">{u.name}</span>
+                        <span className="truncate">
+                          {u.name}
+                          {u.id === ticket.createdBy && !u.isAdmin && (
+                            <span className="ml-1 text-xs text-muted-foreground">(Requerente)</span>
+                          )}
+                        </span>
                       </label>
                     ))}
                   </div>
@@ -591,6 +655,45 @@ export default function TicketsDetail() {
           )}
         </div>
       </div>
+
+      <Dialog open={deadlineDialogOpen} onOpenChange={setDeadlineDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Editar Prazo de Conclusão</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Novo prazo</Label>
+              <Input
+                type="datetime-local"
+                value={newDeadline}
+                onChange={(e) => setNewDeadline(e.target.value)}
+                data-testid="input-deadline"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Motivo (opcional)</Label>
+              <Textarea
+                value={deadlineReason}
+                onChange={(e) => setDeadlineReason(e.target.value)}
+                placeholder="Motivo da alteração do prazo..."
+                rows={3}
+                data-testid="input-deadline-reason"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeadlineDialogOpen(false)}>Cancelar</Button>
+            <Button
+              onClick={handleSaveDeadline}
+              disabled={!newDeadline || updateMutation.isPending}
+              data-testid="button-save-deadline"
+            >
+              {updateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Salvar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

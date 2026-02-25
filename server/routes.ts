@@ -12,6 +12,7 @@ import { storage } from "./storage";
 import { pool } from "./db";
 import type { UserWithRoles } from "@shared/schema";
 import { emitEvent } from "./lib/webhooks";
+import { isEntraConfigured, getMsalClient } from "./lib/entra";
 
 const SALT_ROUNDS = 12;
 const DEFAULT_PASSWORD = "41Tech@2026";
@@ -144,6 +145,7 @@ declare global {
 declare module "express-session" {
   interface SessionData {
     userId?: string;
+    entraState?: string;
   }
 }
 
@@ -206,7 +208,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       cookie: {
         secure: process.env.NODE_ENV === "production",
         httpOnly: true,
-        sameSite: "strict",
+        sameSite: "lax",
         maxAge: 24 * 60 * 60 * 1000,
       },
     })
@@ -229,22 +231,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(user);
   });
 
-  // Development login - simulates Entra ID login
-  // In production, this would redirect to Microsoft Entra ID OAuth flow
   app.get("/api/auth/login", async (req, res) => {
-    // In production, this endpoint should redirect to Microsoft Entra ID OAuth
-    // For now, we implement dev auto-login only in development mode
     if (process.env.NODE_ENV === "production") {
-      // In production, implement proper OAuth flow with Entra ID
-      return res.status(501).json({ 
+      if (isEntraConfigured()) {
+        return res.redirect("/api/auth/entra/login");
+      }
+      return res.status(501).json({
         error: "Microsoft Entra ID authentication not configured",
-        message: "Configure AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, and AZURE_TENANT_ID" 
+        message: "Configure AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID, and AZURE_REDIRECT_URI",
       });
     }
 
     // Development: auto-login as first admin user
     let adminUser = await storage.getUserByEmail(process.env.ENTRA_ADMIN_EMAIL || "admin@41tech.com.br");
-    
+
     if (!adminUser) {
       const allUsers = await storage.getAllUsers();
       if (allUsers.length > 0) {
@@ -257,7 +257,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     req.session.userId = adminUser.id;
-    
+
     await storage.createAuditLog({
       actorUserId: adminUser.id,
       action: "login",
@@ -267,10 +267,132 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.redirect("/");
   });
 
+  // Entra ID OAuth2/OIDC login
+  app.get("/api/auth/entra/login", async (req, res) => {
+    if (!isEntraConfigured()) {
+      return res.status(501).json({ error: "Entra ID not configured" });
+    }
+
+    try {
+      const state = crypto.randomBytes(16).toString("hex");
+      req.session.entraState = state;
+
+      const msalClient = getMsalClient();
+      const authCodeUrl = await msalClient.getAuthCodeUrl({
+        scopes: ["openid", "profile", "email"],
+        redirectUri: process.env.AZURE_REDIRECT_URI!,
+        state,
+        prompt: "select_account",
+      });
+
+      res.redirect(authCodeUrl);
+    } catch (error) {
+      console.error("Entra login error:", error);
+      res.status(500).json({ error: "Failed to initiate Entra ID login" });
+    }
+  });
+
+  // Entra ID OAuth2 callback
+  app.get("/api/auth/entra/callback", async (req, res) => {
+    const { code, state } = req.query;
+
+    if (!code || !state) {
+      return res.status(400).json({ error: "Missing code or state parameter" });
+    }
+
+    if (state !== req.session.entraState) {
+      return res.status(400).json({ error: "Invalid state parameter" });
+    }
+
+    delete req.session.entraState;
+
+    try {
+      const msalClient = getMsalClient();
+      const tokenResponse = await msalClient.acquireTokenByCode({
+        code: code as string,
+        scopes: ["openid", "profile", "email"],
+        redirectUri: process.env.AZURE_REDIRECT_URI!,
+      });
+
+      const claims = tokenResponse.idTokenClaims as Record<string, any>;
+      const oid = claims?.oid as string | undefined;
+      const email = (claims?.preferred_username || claims?.email) as string | undefined;
+      const name = claims?.name as string | undefined;
+
+      let user = null;
+
+      if (oid) {
+        user = await storage.getUserByEntraOid(oid);
+      }
+
+      if (!user && email) {
+        user = await storage.getUserByEmail(email);
+      }
+
+      if (user) {
+        if (oid && !user.entraOid) {
+          await storage.updateUser(user.id, { entraOid: oid } as any);
+        }
+
+        req.session.userId = user.id;
+
+        await storage.createAuditLog({
+          actorUserId: user.id,
+          action: "entra_login_success",
+          ip: req.ip || req.socket.remoteAddress,
+          metadata: { email, oid, name } as any,
+        });
+
+        return res.redirect("/");
+      }
+
+      await storage.createAuditLog({
+        actorUserId: null as any,
+        action: "entra_login_denied",
+        metadata: { email, oid, name } as any,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      return res.status(403).json({
+        error: "Usuário não cadastrado. Contate o administrador.",
+      });
+    } catch (error) {
+      console.error("Entra callback error:", error);
+      return res.status(500).json({ error: "Authentication failed" });
+    }
+  });
+
+  // Entra ID logout
+  app.get("/api/auth/entra/logout", async (req, res) => {
+    const userId = req.session.userId;
+
+    if (userId) {
+      await storage.createAuditLog({
+        actorUserId: userId,
+        action: "logout",
+        ip: req.ip || req.socket.remoteAddress,
+      });
+    }
+
+    req.session.destroy(() => {
+      res.clearCookie("connect.sid");
+
+      const tenantId = process.env.AZURE_TENANT_ID;
+      const postLogoutUri = process.env.AZURE_POST_LOGOUT_REDIRECT_URI || process.env.AZURE_REDIRECT_URI?.replace("/api/auth/entra/callback", "/");
+
+      if (tenantId && postLogoutUri) {
+        const logoutUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/logout?post_logout_redirect_uri=${encodeURIComponent(postLogoutUri)}`;
+        return res.redirect(logoutUrl);
+      }
+
+      res.redirect("/");
+    });
+  });
+
   // Logout
   app.post("/api/auth/logout", requireAuth, async (req, res) => {
     const userId = req.session.userId;
-    
+
     if (userId) {
       await storage.createAuditLog({
         actorUserId: userId,

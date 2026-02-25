@@ -78,6 +78,8 @@ export default function AdminAudit() {
     }).format(new Date(date));
   };
 
+  const recentLogs = logs.slice(0, 10);
+
   return (
     <div className="flex flex-col gap-6 p-6">
       <div className="flex items-center gap-3">
@@ -96,6 +98,35 @@ export default function AdminAudit() {
           </p>
         </div>
       </div>
+
+      <Card data-testid="card-recent-activity">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base font-medium">Atividade recente</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-8 w-full" />
+              ))}
+            </div>
+          ) : recentLogs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nenhuma atividade recente</p>
+          ) : (
+            <div className="space-y-2">
+              {recentLogs.map((log) => (
+                <div key={log.id} className="flex items-center gap-3 text-sm" data-testid={`recent-log-${log.id}`}>
+                  <span className="text-muted-foreground whitespace-nowrap">{formatDate(log.createdAt)}</span>
+                  <Badge variant={getActionBadgeVariant(log.action)} className="shrink-0">
+                    {actionLabels[log.action] || log.action}
+                  </Badge>
+                  <span className="truncate">{log.actorName || "Sistema"}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4">

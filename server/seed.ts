@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { users, sectors, roles, userSectorRoles, resources, healthChecks, ticketSlaPolicies, ticketCategories } from "@shared/schema";
+import { users, sectors, roles, userSectorRoles, resources, healthChecks, ticketSlaPolicies, ticketCategories, notificationSettings } from "@shared/schema";
 import { eq } from "drizzle-orm";
 
 export async function seed() {
@@ -312,6 +312,16 @@ async function ensureTicketDefaults() {
           isActive: true,
         });
         console.log(`Created ticket category root: ${branch}`);
+      }
+    }
+
+    const notifTypes = ["ticket_created", "ticket_comment", "ticket_status", "resource_updated"] as const;
+    for (const type of notifTypes) {
+      const [existing] = await db.select().from(notificationSettings)
+        .where(eq(notificationSettings.type, type));
+      if (!existing) {
+        await db.insert(notificationSettings).values({ type, enabled: true });
+        console.log(`Created notification setting: ${type}`);
       }
     }
   } catch (error) {

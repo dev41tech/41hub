@@ -20,6 +20,8 @@ import {
   ticketAttachments,
   ticketSlaCycles,
   ticketEvents,
+  notificationSettings,
+  notifications,
   type User,
   type InsertUser,
   type Sector,
@@ -50,6 +52,8 @@ import {
   type TicketSlaCycle,
   type TicketCategoryTree,
   type TicketAssignee,
+  type NotificationSetting,
+  type Notification,
 } from "@shared/schema";
 import { computeSlaDueDates } from "./lib/sla";
 
@@ -210,6 +214,19 @@ export interface IStorage {
 
   getAdminUserIds(): Promise<string[]>;
   updateSlaCycleDeadline(ticketId: string, data: { resolutionDueAt: Date; reason?: string; updatedBy: string }): Promise<void>;
+
+  // Notifications
+  getNotificationSettings(): Promise<import("@shared/schema").NotificationSetting[]>;
+  setNotificationSetting(type: string, enabled: boolean): Promise<import("@shared/schema").NotificationSetting>;
+  isNotificationEnabled(type: string): Promise<boolean>;
+  createNotifications(recipients: string[], payload: { type: string; title: string; message: string; linkUrl?: string; data?: Record<string, unknown> }): Promise<void>;
+  listUserNotifications(userId: string, opts: { limit?: number; offset?: number }): Promise<import("@shared/schema").Notification[]>;
+  countUnreadNotifications(userId: string): Promise<number>;
+  markNotificationRead(userId: string, notificationId: string): Promise<boolean>;
+  markAllNotificationsRead(userId: string): Promise<void>;
+
+  // Notification helpers
+  getTicketAssigneeIds(ticketId: string): Promise<string[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1344,6 +1361,96 @@ export class DatabaseStorage implements IStorage {
       resolutionDueAtUpdatedBy: data.updatedBy,
       resolutionDueAtUpdatedAt: new Date(),
     }).where(eq(ticketSlaCycles.id, cycle.id));
+  }
+
+  // Notifications
+  async getNotificationSettings(): Promise<NotificationSetting[]> {
+    return db.select().from(notificationSettings).orderBy(notificationSettings.type);
+  }
+
+  async setNotificationSetting(type: string, enabled: boolean): Promise<NotificationSetting> {
+    const [existing] = await db.select().from(notificationSettings)
+      .where(eq(notificationSettings.type, type as any));
+    if (existing) {
+      const [updated] = await db.update(notificationSettings)
+        .set({ enabled, updatedAt: new Date() })
+        .where(eq(notificationSettings.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(notificationSettings)
+      .values({ type: type as any, enabled })
+      .returning();
+    return created;
+  }
+
+  async isNotificationEnabled(type: string): Promise<boolean> {
+    const [setting] = await db.select().from(notificationSettings)
+      .where(eq(notificationSettings.type, type as any));
+    return setting ? setting.enabled : true;
+  }
+
+  async createNotifications(recipients: string[], payload: { type: string; title: string; message: string; linkUrl?: string; data?: Record<string, unknown> }): Promise<void> {
+    if (recipients.length === 0) return;
+    const enabled = await this.isNotificationEnabled(payload.type);
+    if (!enabled) return;
+    const values = recipients.map(userId => ({
+      recipientUserId: userId,
+      type: payload.type as any,
+      title: payload.title,
+      message: payload.message,
+      linkUrl: payload.linkUrl || null,
+      data: payload.data || {},
+      isRead: false,
+    }));
+    await db.insert(notifications).values(values);
+  }
+
+  async listUserNotifications(userId: string, opts: { limit?: number; offset?: number }): Promise<Notification[]> {
+    const limit = opts.limit || 20;
+    const offset = opts.offset || 0;
+    return db.select().from(notifications)
+      .where(eq(notifications.recipientUserId, userId))
+      .orderBy(desc(notifications.createdAt))
+      .limit(limit)
+      .offset(offset);
+  }
+
+  async countUnreadNotifications(userId: string): Promise<number> {
+    const [result] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(notifications)
+      .where(and(
+        eq(notifications.recipientUserId, userId),
+        eq(notifications.isRead, false),
+      ));
+    return result?.count || 0;
+  }
+
+  async markNotificationRead(userId: string, notificationId: string): Promise<boolean> {
+    const [updated] = await db.update(notifications)
+      .set({ isRead: true })
+      .where(and(
+        eq(notifications.id, notificationId),
+        eq(notifications.recipientUserId, userId),
+      ))
+      .returning();
+    return !!updated;
+  }
+
+  async markAllNotificationsRead(userId: string): Promise<void> {
+    await db.update(notifications)
+      .set({ isRead: true })
+      .where(and(
+        eq(notifications.recipientUserId, userId),
+        eq(notifications.isRead, false),
+      ));
+  }
+
+  async getTicketAssigneeIds(ticketId: string): Promise<string[]> {
+    const rows = await db.select({ userId: ticketAssignees.userId })
+      .from(ticketAssignees)
+      .where(eq(ticketAssignees.ticketId, ticketId));
+    return rows.map(r => r.userId);
   }
 }
 

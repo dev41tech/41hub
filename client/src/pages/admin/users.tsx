@@ -1,14 +1,15 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Pencil, Users, Shield, Check, KeyRound, RotateCcw, Building2, X } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Users, Shield, Check, KeyRound, RotateCcw, Building2, X, Save, Eye, EyeOff } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -39,6 +40,18 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { UserWithRoles, Sector } from "@shared/schema";
 
+interface AdminSettingsData {
+  DEFAULT_LOCAL_PASSWORD?: string;
+}
+
+const defaultPasswordRequirements = [
+  { label: "Mínimo 10 caracteres", test: (p: string) => p.length >= 10 },
+  { label: "Uma letra maiúscula", test: (p: string) => /[A-Z]/.test(p) },
+  { label: "Uma letra minúscula", test: (p: string) => /[a-z]/.test(p) },
+  { label: "Um número", test: (p: string) => /[0-9]/.test(p) },
+  { label: "Um caractere especial (!@#$%^&*)", test: (p: string) => /[!@#$%^&*(),.?":{}|<>]/.test(p) },
+];
+
 interface PasswordRequirement {
   label: string;
   test: (password: string) => boolean;
@@ -65,6 +78,10 @@ export default function AdminUsers() {
   const [formSectorIds, setFormSectorIds] = useState<string[]>([]);
   const [formRoleName, setFormRoleName] = useState<"Admin" | "Coordenador" | "Usuario">("Usuario");
   const [formAuthProvider, setFormAuthProvider] = useState<"entra" | "local">("local");
+  const [defaultPassword, setDefaultPassword] = useState("");
+  const [showDefaultPassword, setShowDefaultPassword] = useState(false);
+
+  const allDefaultRequirementsMet = defaultPasswordRequirements.every((r) => r.test(defaultPassword));
 
   const { data: users = [], isLoading: usersLoading } = useQuery<UserWithRoles[]>({
     queryKey: ["/api/admin/users"],
@@ -73,6 +90,37 @@ export default function AdminUsers() {
   const { data: sectors = [] } = useQuery<Sector[]>({
     queryKey: ["/api/admin/sectors"],
   });
+
+  const { data: adminSettings, isLoading: settingsLoading } = useQuery<AdminSettingsData>({
+    queryKey: ["/api/admin/settings"],
+  });
+
+  useEffect(() => {
+    if (adminSettings?.DEFAULT_LOCAL_PASSWORD) {
+      setDefaultPassword(adminSettings.DEFAULT_LOCAL_PASSWORD);
+    }
+  }, [adminSettings]);
+
+  const updateSettingMutation = useMutation({
+    mutationFn: async (data: { key: string; value: string }) => {
+      return apiRequest("PUT", "/api/admin/settings", data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/settings"] });
+      toast({ title: "Configuração salva com sucesso" });
+    },
+    onError: () => {
+      toast({ title: "Erro ao salvar configuração", variant: "destructive" });
+    },
+  });
+
+  const handleSaveDefaultPassword = () => {
+    if (!allDefaultRequirementsMet) {
+      toast({ title: "Senha não atende aos requisitos", variant: "destructive" });
+      return;
+    }
+    updateSettingMutation.mutate({ key: "DEFAULT_LOCAL_PASSWORD", value: defaultPassword });
+  };
 
   const createMutation = useMutation({
     mutationFn: async (data: { email: string; name: string; sectorIds?: string[]; roleName: string; authProvider?: string }) => {
@@ -266,6 +314,13 @@ export default function AdminUsers() {
         </div>
       </div>
 
+      <Tabs defaultValue="users" data-testid="tabs-users">
+        <TabsList>
+          <TabsTrigger value="users" data-testid="tab-users">Usuários</TabsTrigger>
+          <TabsTrigger value="default-password" data-testid="tab-default-password">Senha padrão</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="users" className="mt-4">
       <Card>
         <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4">
           <CardTitle className="text-base font-medium">
@@ -420,6 +475,84 @@ export default function AdminUsers() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="default-password" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base font-medium">
+                <KeyRound className="h-4 w-4" />
+                Senha Padrão para Usuários Locais
+              </CardTitle>
+              <CardDescription>
+                Quando um novo usuário local é criado, ele recebe esta senha inicial.
+                O usuário será obrigado a alterá-la no primeiro login.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {settingsLoading ? (
+                <Skeleton className="h-10 w-full" />
+              ) : (
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <div className="flex-1 space-y-2">
+                    <Label htmlFor="defaultPassword">Senha Padrão</Label>
+                    <div className="relative">
+                      <Input
+                        id="defaultPassword"
+                        type={showDefaultPassword ? "text" : "password"}
+                        value={defaultPassword}
+                        onChange={(e) => setDefaultPassword(e.target.value)}
+                        placeholder="Senha padrão para novos usuários"
+                        className="pr-10"
+                        data-testid="input-default-password"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-0 top-0 h-full"
+                        onClick={() => setShowDefaultPassword(!showDefaultPassword)}
+                        data-testid="button-toggle-default-password"
+                      >
+                        {showDefaultPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                    {defaultPassword && (
+                      <div className="space-y-1 text-sm mt-2">
+                        {defaultPasswordRequirements.map((req, i) => {
+                          const met = req.test(defaultPassword);
+                          return (
+                            <div key={i} className="flex items-center gap-2">
+                              {met ? (
+                                <Check className="h-4 w-4 text-green-500" />
+                              ) : (
+                                <X className="h-4 w-4 text-muted-foreground" />
+                              )}
+                              <span className={met ? "text-green-600" : "text-muted-foreground"}>
+                                {req.label}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-end">
+                    <Button
+                      onClick={handleSaveDefaultPassword}
+                      disabled={updateSettingMutation.isPending || !allDefaultRequirementsMet}
+                      data-testid="button-save-default-password"
+                    >
+                      <Save className="h-4 w-4 mr-2" />
+                      Salvar
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="max-w-lg">

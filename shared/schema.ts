@@ -14,6 +14,7 @@ export const authProviderEnum = pgEnum("auth_provider", ["entra", "local"]);
 export const ticketStatusEnum = pgEnum("ticket_status", ["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO", "RESOLVIDO", "CANCELADO"]);
 export const ticketPriorityEnum = pgEnum("ticket_priority", ["BAIXA", "MEDIA", "ALTA", "URGENTE"]);
 export const ticketEventTypeEnum = pgEnum("ticket_event_type", ["ticket_created", "status_changed", "assignees_changed", "comment_added", "attachment_added", "resolved", "reopened", "priority_changed", "category_changed"]);
+export const notificationTypeEnum = pgEnum("notification_type", ["ticket_created", "ticket_comment", "ticket_status", "resource_updated"]);
 
 // Users table
 export const users = pgTable("users", {
@@ -257,6 +258,28 @@ export const insertFavoriteSchema = createInsertSchema(favorites).omit({
   createdAt: true,
 });
 
+// Notification settings (admin toggle per type)
+export const notificationSettings = pgTable("notification_settings", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  type: notificationTypeEnum("type").notNull().unique(),
+  enabled: boolean("enabled").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// Notifications (per-user inbox)
+export const notifications = pgTable("notifications", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  recipientUserId: varchar("recipient_user_id", { length: 36 }).notNull().references(() => users.id, { onDelete: "cascade" }),
+  type: notificationTypeEnum("type").notNull(),
+  title: varchar("title", { length: 180 }).notNull(),
+  message: text("message").notNull(),
+  linkUrl: varchar("link_url", { length: 255 }),
+  data: jsonb("data").default({}),
+  isRead: boolean("is_read").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
   id: true,
   createdAt: true,
@@ -264,6 +287,17 @@ export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({
 
 export const insertAdminSettingSchema = createInsertSchema(adminSettings).omit({
   updatedAt: true,
+});
+
+export const insertNotificationSettingSchema = createInsertSchema(notificationSettings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertNotificationSchema = createInsertSchema(notifications).omit({
+  id: true,
+  createdAt: true,
 });
 
 export const insertTicketCategorySchema = createInsertSchema(ticketCategories).omit({
@@ -338,6 +372,12 @@ export type TicketAttachment = typeof ticketAttachments.$inferSelect;
 export type TicketSlaCycle = typeof ticketSlaCycles.$inferSelect;
 
 export type TicketEvent = typeof ticketEvents.$inferSelect;
+
+export type NotificationSetting = typeof notificationSettings.$inferSelect;
+export type InsertNotificationSetting = z.infer<typeof insertNotificationSettingSchema>;
+
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
 
 // Extended types for frontend
 export type ResourceWithHealth = Resource & {

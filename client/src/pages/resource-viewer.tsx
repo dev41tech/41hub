@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import { ArrowLeft, ExternalLink, Star, AlertCircle, Monitor, Layout } from "lucide-react";
@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/lib/theme-provider";
 import type { ResourceWithHealth } from "@shared/schema";
 
 type OpenBehavior = "HUB_ONLY" | "NEW_TAB_ONLY" | "BOTH";
@@ -38,10 +39,22 @@ const getStatusText = (status?: "UP" | "DEGRADED" | "DOWN") => {
   }
 };
 
+function appendHubTheme(url: string, theme: string): string {
+  try {
+    const u = new URL(url, window.location.origin);
+    u.searchParams.set("hubTheme", theme);
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 export default function ResourceViewer() {
   const [, params] = useRoute("/resource/:id");
   const [, setLocation] = useLocation();
   const resourceId = params?.id;
+  const { theme } = useTheme();
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   const { data: resource, isLoading, error } = useQuery<ResourceWithHealth>({
     queryKey: ["/api/resources", resourceId],
@@ -75,13 +88,23 @@ export default function ResourceViewer() {
     if (resource) {
       recordAccessMutation.mutate();
       
-      // Auto-redirect to new tab if openBehavior is NEW_TAB_ONLY (once per resource)
       if (openBehavior === "NEW_TAB_ONLY" && resource.url && hasOpenedInNewTab.current !== resource.id) {
         hasOpenedInNewTab.current = resource.id;
-        window.open(resource.url, "_blank");
+        window.open(appendHubTheme(resource.url, theme), "_blank");
       }
     }
   }, [resource?.id, openBehavior]);
+
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({ type: "hub-theme-change", theme }, "*");
+    }
+  }, [theme]);
+
+  const openInNewTab = useCallback((url: string) => {
+    window.open(appendHubTheme(url, theme), "_blank");
+  }, [theme]);
 
   if (isLoading) {
     return (
@@ -148,7 +171,7 @@ export default function ResourceViewer() {
           </div>
           <Button
             variant="outline"
-            onClick={() => window.open(resource.url!, "_blank")}
+            onClick={() => openInNewTab(resource.url!)}
             data-testid="button-open-external"
           >
             <ExternalLink className="h-4 w-4 mr-2" />
@@ -208,6 +231,7 @@ export default function ResourceViewer() {
     if (resource.embedMode === "IFRAME" && resource.url) {
       return (
         <iframe
+          ref={iframeRef}
           src={`/api/proxy/${resource.id}`}
           className="w-full h-full border-0"
           title={resource.name}
@@ -238,7 +262,7 @@ export default function ResourceViewer() {
               {resource.url && openBehavior !== "HUB_ONLY" && (
                 <Button
                   variant="outline"
-                  onClick={() => window.open(resource.url!, "_blank")}
+                  onClick={() => openInNewTab(resource.url!)}
                   data-testid="button-open-powerbi"
                 >
                   <ExternalLink className="h-4 w-4 mr-2" />
@@ -280,7 +304,7 @@ export default function ResourceViewer() {
               </div>
               {openBehavior !== "HUB_ONLY" && (
                 <Button
-                  onClick={() => window.open(resource.url!, "_blank")}
+                  onClick={() => openInNewTab(resource.url!)}
                   data-testid="button-open-external"
                 >
                   <ExternalLink className="h-4 w-4 mr-2" />
@@ -373,7 +397,7 @@ export default function ResourceViewer() {
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => window.open(resource.url!, "_blank")}
+              onClick={() => openInNewTab(resource.url!)}
               data-testid="button-open-new-tab"
             >
               <ExternalLink className="h-4 w-4" />

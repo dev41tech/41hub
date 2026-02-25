@@ -1219,6 +1219,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const ticket = await storage.createTicket(parsed.data, req.user!);
+
+      try {
+        const enabled = await storage.isNotificationEnabled("ticket_created");
+        if (enabled) {
+          const allAdmins = await storage.getAdminUserIds();
+          const recipients = allAdmins.filter(id => id !== req.user!.id);
+          if (recipients.length > 0) {
+            await storage.createNotifications(recipients, {
+              type: "ticket_created",
+              title: "Novo chamado criado",
+              message: `${req.user!.name} criou o chamado: ${parsed.data.title}`,
+              linkUrl: `/tickets/${ticket.id}`,
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.error("Error dispatching ticket_created notification:", notifErr);
+      }
+
       res.status(201).json(ticket);
     } catch (error: any) {
       console.error("Error creating ticket:", error);
@@ -1268,6 +1287,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const updated = await storage.adminUpdateTicket(req.params.id, ticketPatch, req.user!);
       if (!updated) return res.status(404).json({ error: "Chamado não encontrado" });
+
+      if (ticketPatch.status) {
+        try {
+          const enabled = await storage.isNotificationEnabled("ticket_status");
+          if (enabled) {
+            const statusLabels: Record<string, string> = {
+              ABERTO: "Aberto", EM_ANDAMENTO: "Em andamento",
+              AGUARDANDO_USUARIO: "Aguardando usuário", RESOLVIDO: "Resolvido", CANCELADO: "Cancelado"
+            };
+            const assignees = await storage.getTicketAssigneeIds(req.params.id);
+            const recipients = [updated.createdBy, ...assignees].filter(
+              (id, i, arr) => id !== req.user!.id && arr.indexOf(id) === i
+            );
+            if (recipients.length > 0) {
+              await storage.createNotifications(recipients, {
+                type: "ticket_status",
+                title: "Status do chamado alterado",
+                message: `Chamado #${updated.number} alterado para: ${statusLabels[ticketPatch.status] || ticketPatch.status}`,
+                linkUrl: `/tickets/${updated.id}`,
+              });
+            }
+          }
+        } catch (notifErr) {
+          console.error("Error dispatching ticket_status notification:", notifErr);
+        }
+      }
+
       res.json(updated);
     } catch (error: any) {
       console.error("Error updating ticket:", error);
@@ -1333,6 +1379,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const comment = await storage.addTicketComment(req.params.id, req.user!, parsed.data);
+
+      try {
+        const enabled = await storage.isNotificationEnabled("ticket_comment");
+        if (enabled && !parsed.data.isInternal) {
+          const assignees = await storage.getTicketAssigneeIds(req.params.id);
+          const recipients = [ticket.createdBy, ...assignees].filter(
+            (id, i, arr) => id !== req.user!.id && arr.indexOf(id) === i
+          );
+          if (recipients.length > 0) {
+            await storage.createNotifications(recipients, {
+              type: "ticket_comment",
+              title: "Novo comentário no chamado",
+              message: `${req.user!.name} comentou no chamado #${ticket.number}: ${ticket.title}`,
+              linkUrl: `/tickets/${ticket.id}`,
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.error("Error dispatching ticket_comment notification:", notifErr);
+      }
+
       res.status(201).json(comment);
     } catch (error: any) {
       console.error("Error adding comment:", error);
@@ -1560,6 +1627,79 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (error) {
       console.error("Error updating SLA policy:", error);
       res.status(500).json({ error: "Failed to update SLA policy" });
+    }
+  });
+
+  // ============ Notification Routes ============
+
+  app.get("/api/notifications", requireAuth, async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 20;
+      const offset = parseInt(req.query.offset as string) || 0;
+      const items = await storage.listUserNotifications(req.user!.id, { limit, offset });
+      res.json(items);
+    } catch (error) {
+      console.error("Error fetching notifications:", error);
+      res.status(500).json({ error: "Failed to fetch notifications" });
+    }
+  });
+
+  app.get("/api/notifications/unread-count", requireAuth, async (req, res) => {
+    try {
+      const count = await storage.countUnreadNotifications(req.user!.id);
+      res.json({ count });
+    } catch (error) {
+      console.error("Error counting notifications:", error);
+      res.status(500).json({ error: "Failed to count notifications" });
+    }
+  });
+
+  app.post("/api/notifications/:id/read", requireAuth, async (req, res) => {
+    try {
+      const ok = await storage.markNotificationRead(req.user!.id, req.params.id);
+      if (!ok) return res.status(404).json({ error: "Notificação não encontrada" });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error marking notification read:", error);
+      res.status(500).json({ error: "Failed to mark notification read" });
+    }
+  });
+
+  app.post("/api/notifications/read-all", requireAuth, async (req, res) => {
+    try {
+      await storage.markAllNotificationsRead(req.user!.id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error marking all notifications read:", error);
+      res.status(500).json({ error: "Failed to mark all notifications read" });
+    }
+  });
+
+  app.get("/api/admin/notifications/settings", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const settings = await storage.getNotificationSettings();
+      res.json(settings);
+    } catch (error) {
+      console.error("Error fetching notification settings:", error);
+      res.status(500).json({ error: "Failed to fetch notification settings" });
+    }
+  });
+
+  app.patch("/api/admin/notifications/settings", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        type: z.enum(["ticket_created", "ticket_comment", "ticket_status", "resource_updated"]),
+        enabled: z.boolean(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos" });
+      }
+      const setting = await storage.setNotificationSetting(parsed.data.type, parsed.data.enabled);
+      res.json(setting);
+    } catch (error) {
+      console.error("Error updating notification setting:", error);
+      res.status(500).json({ error: "Failed to update notification setting" });
     }
   });
 

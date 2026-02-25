@@ -37,7 +37,8 @@ import type { TicketCategory } from "@shared/schema";
 
 type DialogMode = "branch" | "subcategory" | "edit";
 
-export default function AdminTicketCategories() {
+export default function AdminTicketCategories(props: { embedded?: boolean } & Record<string, any>) {
+  const embedded = props.embedded ?? false;
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<DialogMode>("branch");
@@ -164,7 +165,8 @@ export default function AdminTicketCategories() {
   });
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className={embedded ? "flex flex-col gap-4" : "flex flex-col gap-6 p-6"}>
+      {!embedded && (
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link href="/admin">
@@ -191,6 +193,19 @@ export default function AdminTicketCategories() {
           </Button>
         </div>
       </div>
+      )}
+      {embedded && (
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="outline" onClick={openCreateBranch} data-testid="button-new-branch">
+            <Plus className="mr-2 h-4 w-4" />
+            Nova Branch
+          </Button>
+          <Button onClick={openCreateSubcategory} data-testid="button-new-subcategory">
+            <Plus className="mr-2 h-4 w-4" />
+            Nova Subcategoria
+          </Button>
+        </div>
+      )}
 
       <Card>
         <CardContent className="pt-6">

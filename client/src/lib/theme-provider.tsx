@@ -34,6 +34,7 @@ export function ThemeProvider({
     root.classList.remove("light", "dark");
     root.classList.add(theme);
     localStorage.setItem(storageKey, theme);
+    window.dispatchEvent(new CustomEvent("hub-theme-change", { detail: { theme } }));
   }, [theme, storageKey]);
 
   const setTheme = (newTheme: Theme) => {

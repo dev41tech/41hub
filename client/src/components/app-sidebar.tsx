@@ -42,7 +42,7 @@ const mainMenuItems = [
 ];
 
 const adminMenuItems = [
-  { title: "Admin", url: "/admin", icon: Settings },
+  { title: "Configurações", url: "/admin", icon: Settings },
 ];
 
 export function AppSidebar() {
@@ -93,7 +93,7 @@ export function AppSidebar() {
 
         {isAdmin && (
           <SidebarGroup>
-            <SidebarGroupLabel>Administração</SidebarGroupLabel>
+            <SidebarGroupLabel>Configurações</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 {adminMenuItems.map((item) => (

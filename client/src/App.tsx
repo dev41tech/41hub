@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { NotificationBell } from "@/components/notification-bell";
 import { ThemeLogo } from "@/components/theme-logo";
 import { Skeleton } from "@/components/ui/skeleton";
 import NotFound from "@/pages/not-found";
@@ -32,6 +33,8 @@ import AdminAudit from "@/pages/admin/audit";
 import AdminSettings from "@/pages/admin/settings";
 import AdminTicketCategories from "@/pages/admin/ticket-categories";
 import AdminTicketSlaPolicies from "@/pages/admin/ticket-sla";
+import AdminTicketsSettings from "@/pages/admin/tickets-settings";
+import AdminNotifications from "@/pages/admin/notifications";
 import TicketsIndex from "@/pages/tickets/index";
 import TicketsNew from "@/pages/tickets/new";
 import TicketsDetail from "@/pages/tickets/detail";
@@ -54,6 +57,8 @@ function Router() {
       <Route path="/admin/resources" component={AdminResources} />
       <Route path="/admin/audit" component={AdminAudit} />
       <Route path="/admin/settings" component={AdminSettings} />
+      <Route path="/admin/tickets-settings" component={AdminTicketsSettings} />
+      <Route path="/admin/notifications" component={AdminNotifications} />
       <Route path="/admin/tickets/categories" component={AdminTicketCategories} />
       <Route path="/admin/tickets/sla" component={AdminTicketSlaPolicies} />
       <Route component={NotFound} />
@@ -74,7 +79,10 @@ function AuthenticatedLayout() {
         <SidebarInset className="flex flex-col flex-1 overflow-hidden">
           <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b bg-card px-4">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
-            <ThemeToggle />
+            <div className="flex items-center gap-1">
+              <NotificationBell />
+              <ThemeToggle />
+            </div>
           </header>
           <main className="flex-1 overflow-auto">
             <Router />

@@ -49,6 +49,7 @@ export default function Profile() {
   const [, setLocation] = useLocation();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [whatsapp, setWhatsapp] = useState(user?.whatsapp || "");
+  const [isEditingWhatsapp, setIsEditingWhatsapp] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
   const [showAllSectors, setShowAllSectors] = useState(false);
@@ -104,6 +105,7 @@ export default function Profile() {
     },
     onSuccess: async () => {
       await refreshUser();
+      setIsEditingWhatsapp(false);
       queryClient.invalidateQueries({ queryKey: ["/api/users/directory"] });
       toast({
         title: "WhatsApp atualizado",
@@ -114,6 +116,25 @@ export default function Profile() {
       toast({
         title: "Erro",
         description: "Não foi possível salvar o WhatsApp.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const clearWhatsappMutation = useMutation({
+    mutationFn: async () => {
+      return apiRequest("PATCH", "/api/users/me", { whatsapp: null });
+    },
+    onSuccess: async () => {
+      await refreshUser();
+      setWhatsapp("");
+      setIsEditingWhatsapp(true);
+      queryClient.invalidateQueries({ queryKey: ["/api/users/directory"] });
+    },
+    onError: () => {
+      toast({
+        title: "Erro",
+        description: "Não foi possível limpar o WhatsApp.",
         variant: "destructive",
       });
     },
@@ -252,34 +273,59 @@ export default function Profile() {
               )}
 
               <div className="pt-4 border-t">
-                <Label htmlFor="whatsapp" className="flex items-center gap-2 mb-2">
+                <Label className="flex items-center gap-2 mb-2">
                   <Phone className="h-4 w-4" />
                   WhatsApp (opcional)
                 </Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="whatsapp"
-                    type="tel"
-                    placeholder="(41) 99999-9999"
-                    value={whatsapp}
-                    onChange={(e) => setWhatsapp(e.target.value)}
-                    className="max-w-xs"
-                    data-testid="input-whatsapp"
-                  />
-                  <Button
-                    onClick={() => updateWhatsappMutation.mutate(whatsapp)}
-                    disabled={updateWhatsappMutation.isPending}
-                    data-testid="button-save-whatsapp"
-                  >
-                    {updateWhatsappMutation.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Save className="h-4 w-4" />
-                    )}
-                    <span className="ml-2 hidden sm:inline">Salvar</span>
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
+                {user.whatsapp && !isEditingWhatsapp ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-3">
+                      <SiWhatsapp className="h-4 w-4 text-green-600" />
+                      <span className="text-sm font-medium" data-testid="text-whatsapp-value">{user.whatsapp}</span>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => clearWhatsappMutation.mutate()}
+                      disabled={clearWhatsappMutation.isPending}
+                      data-testid="button-change-whatsapp"
+                    >
+                      {clearWhatsappMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      ) : (
+                        <Phone className="h-4 w-4 mr-2" />
+                      )}
+                      Alterar WhatsApp
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <Input
+                        id="whatsapp"
+                        type="tel"
+                        placeholder="(41) 99999-9999"
+                        value={whatsapp}
+                        onChange={(e) => setWhatsapp(e.target.value)}
+                        className="max-w-xs"
+                        data-testid="input-whatsapp"
+                      />
+                      <Button
+                        onClick={() => updateWhatsappMutation.mutate(whatsapp)}
+                        disabled={updateWhatsappMutation.isPending || !whatsapp.trim()}
+                        data-testid="button-save-whatsapp"
+                      >
+                        {updateWhatsappMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Save className="h-4 w-4" />
+                        )}
+                        <span className="ml-2 hidden sm:inline">Salvar</span>
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground mt-2">
                   Usado para o botão "Chamar no WhatsApp" visível para colegas no Diretório.
                 </p>
               </div>

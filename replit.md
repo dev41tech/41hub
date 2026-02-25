@@ -23,6 +23,9 @@ Key features:
 - Ticket/helpdesk module with SLA tracking, categories, comments, attachments
 - SLA manual deadline override per ticket (admin only)
 - Category description templates auto-filling ticket descriptions
+- In-app notification system with bell icon, unread count, per-type admin toggles
+- Notification dispatching on ticket create, comment, and status change
+- Admin "Configurações" panel with consolidated pages (users+password, tickets settings, notifications)
 
 ## User Preferences
 
@@ -52,7 +55,7 @@ Preferred communication style: Simple, everyday language.
 - **ORM**: Drizzle ORM with drizzle-zod for schema validation
 - **Schema Location**: `shared/schema.ts` (shared between frontend and backend)
 - **Migrations**: Drizzle Kit with `db:push` command
-- **Key Tables**: users, sectors, roles, user_sector_roles, resources, resource_overrides, favorites, recent_access, audit_logs, health_checks, ticket_categories, ticket_sla_policies, tickets, ticket_assignees, ticket_comments, ticket_attachments, ticket_sla_cycles, ticket_events
+- **Key Tables**: users, sectors, roles, user_sector_roles, resources, resource_overrides, favorites, recent_access, audit_logs, health_checks, ticket_categories, ticket_sla_policies, tickets, ticket_assignees, ticket_comments, ticket_attachments, ticket_sla_cycles, ticket_events, notification_settings, notifications
 
 ### Authentication Flow
 **Microsoft Entra ID:**

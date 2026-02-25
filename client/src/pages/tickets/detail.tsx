@@ -37,6 +37,8 @@ import {
   Send,
   Pencil,
   AlertTriangle,
+  CheckSquare,
+  HelpCircle,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type {
@@ -122,6 +124,16 @@ function getSlaInfo(cycle: TicketSlaCycle | null | undefined) {
 }
 
 type CommentWithAuthor = TicketComment & { authorName?: string; authorEmail?: string };
+
+interface ChecklistItem {
+  id: string;
+  ticketId: string;
+  key: string;
+  label: string;
+  isDone: boolean;
+  doneBy: string | null;
+  doneAt: string | null;
+}
 
 interface DirectoryUser {
   id: string;
@@ -266,6 +278,43 @@ export default function TicketsDetail() {
     },
     onError: (e: any) => {
       toast({ title: "Erro no upload", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const { data: checklist = [] } = useQuery<ChecklistItem[]>({
+    queryKey: ["/api/tickets", ticketId, "checklist"],
+    queryFn: async () => {
+      const res = await fetch(`/api/tickets/${ticketId}/checklist`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!ticketId,
+  });
+
+  const checklistMutation = useMutation({
+    mutationFn: async ({ itemId, isDone }: { itemId: string; isDone: boolean }) => {
+      await apiRequest("PATCH", `/api/tickets/${ticketId}/checklist/${itemId}`, { isDone });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId, "checklist"] });
+    },
+    onError: (e: any) => {
+      toast({ title: "Erro", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const requestInfoMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/tickets/${ticketId}/request-info`, {});
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId, "comments"] });
+      toast({ title: data.message || "Informações solicitadas" });
+    },
+    onError: (e: any) => {
+      toast({ title: "Erro", description: e.message, variant: "destructive" });
     },
   });
 
@@ -478,6 +527,32 @@ export default function TicketsDetail() {
               )}
             </CardContent>
           </Card>
+          {checklist.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <CheckSquare className="h-4 w-4" />
+                  Checklist ({checklist.filter(c => c.isDone).length}/{checklist.length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {checklist.map(item => (
+                  <label key={item.id} className="flex items-center gap-2 text-sm cursor-pointer" data-testid={`checklist-${item.key}`}>
+                    <Checkbox
+                      checked={item.isDone}
+                      onCheckedChange={(checked) => {
+                        if (isAdmin) {
+                          checklistMutation.mutate({ itemId: item.id, isDone: checked === true });
+                        }
+                      }}
+                      disabled={!isAdmin}
+                    />
+                    <span className={item.isDone ? "line-through text-muted-foreground" : ""}>{item.label}</span>
+                  </label>
+                ))}
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         <div className="space-y-4">
@@ -670,6 +745,24 @@ export default function TicketsDetail() {
                     )}
                   </Button>
                 </div>
+
+                <Separator />
+
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  size="sm"
+                  onClick={() => requestInfoMutation.mutate()}
+                  disabled={requestInfoMutation.isPending || ticket.status === "RESOLVIDO" || ticket.status === "CANCELADO"}
+                  data-testid="button-request-info"
+                >
+                  {requestInfoMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                  ) : (
+                    <HelpCircle className="h-4 w-4 mr-1" />
+                  )}
+                  Pedir infos pendentes
+                </Button>
               </CardContent>
             </Card>
           )}

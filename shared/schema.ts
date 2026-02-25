@@ -134,8 +134,16 @@ export const ticketCategories = pgTable("ticket_categories", {
   parentId: varchar("parent_id", { length: 36 }).references((): any => ticketCategories.id, { onDelete: "set null" }),
   isActive: boolean("is_active").notNull().default(true),
   descriptionTemplate: text("description_template"),
-  formSchema: jsonb("form_schema").$type<Array<{ key: string; label: string; type: string; required?: boolean; options?: string[] }>>(),
+  formSchema: jsonb("form_schema").$type<Array<{
+    key: string; label: string; type: string; required?: boolean; options?: string[];
+    placeholder?: string; helpText?: string;
+    rules?: { regex?: string; minLen?: number; maxLen?: number; min?: number; max?: number };
+  }>>(),
   templateApplyMode: varchar("template_apply_mode", { length: 30 }).notNull().default("replace_if_empty"),
+  requiredAttachments: jsonb("required_attachments").$type<Array<{ key: string; label: string; mime?: string[]; required?: boolean }>>().default([]),
+  checklistTemplate: jsonb("checklist_template").$type<Array<{ key: string; label: string }>>().default([]),
+  kbTags: text("kb_tags").array().default(sql`ARRAY[]::text[]`),
+  autoAwaitOnMissing: boolean("auto_await_on_missing").notNull().default(false),
   createdBy: varchar("created_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
@@ -201,8 +209,23 @@ export const ticketAttachments = pgTable("ticket_attachments", {
   storageName: varchar("storage_name", { length: 255 }).notNull().unique(),
   mimeType: varchar("mime_type", { length: 120 }).notNull(),
   sizeBytes: integer("size_bytes").notNull(),
+  attachmentKey: varchar("attachment_key", { length: 80 }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
+
+// Ticket checklist items (auto-created from category template)
+export const ticketChecklistItems = pgTable("ticket_checklist_items", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id", { length: 36 }).notNull().references(() => tickets.id, { onDelete: "cascade" }),
+  key: varchar("key", { length: 80 }).notNull(),
+  label: varchar("label", { length: 255 }).notNull(),
+  isDone: boolean("is_done").notNull().default(false),
+  doneBy: varchar("done_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  doneAt: timestamp("done_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  unique().on(t.ticketId, t.key),
+]);
 
 // Ticket SLA cycles (reopening = new cycle)
 export const ticketSlaCycles = pgTable("ticket_sla_cycles", {
@@ -374,6 +397,8 @@ export type TicketComment = typeof ticketComments.$inferSelect;
 export type InsertTicketComment = z.infer<typeof insertTicketCommentSchema>;
 
 export type TicketAttachment = typeof ticketAttachments.$inferSelect;
+
+export type TicketChecklistItem = typeof ticketChecklistItems.$inferSelect;
 
 export type TicketSlaCycle = typeof ticketSlaCycles.$inferSelect;
 

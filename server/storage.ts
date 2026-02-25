@@ -60,6 +60,8 @@ import {
   type KbArticle,
   type InsertKbArticle,
   type KbArticleFeedback as KbArticleFeedbackType,
+  ticketChecklistItems,
+  type TicketChecklistItem,
   typingTexts,
   typingSessions,
   typingScores,
@@ -221,10 +223,16 @@ export interface IStorage {
     storageName: string;
     mimeType: string;
     sizeBytes: number;
+    attachmentKey?: string;
   }): Promise<TicketAttachment>;
 
   listTicketComments(ticketId: string, user: UserWithRoles): Promise<(TicketComment & { authorName?: string; authorEmail?: string })[]>;
   listTicketAttachments(ticketId: string, user: UserWithRoles): Promise<TicketAttachment[]>;
+
+  getTicketAttachmentRequirements(ticketId: string): Promise<Array<{ key: string; label: string; mime?: string[]; required?: boolean; satisfied: boolean }>>;
+
+  listTicketChecklistItems(ticketId: string): Promise<import("@shared/schema").TicketChecklistItem[]>;
+  updateChecklistItem(ticketId: string, itemId: string, isDone: boolean, userId: string): Promise<import("@shared/schema").TicketChecklistItem | undefined>;
 
   getAdminUserIds(): Promise<string[]>;
   updateSlaCycleDeadline(ticketId: string, data: { resolutionDueAt: Date; reason?: string; updatedBy: string }): Promise<void>;
@@ -243,7 +251,7 @@ export interface IStorage {
   getTicketAssigneeIds(ticketId: string): Promise<string[]>;
 
   // Knowledge Base
-  listKbArticles(filters: { categoryId?: string; q?: string; publishedOnly?: boolean }): Promise<(KbArticle & { categoryName?: string; authorName?: string; viewCount?: number; helpfulCount?: number; notHelpfulCount?: number })[]>;
+  listKbArticles(filters: { categoryId?: string; q?: string; tags?: string[]; publishedOnly?: boolean }): Promise<(KbArticle & { categoryName?: string; authorName?: string; viewCount?: number; helpfulCount?: number; notHelpfulCount?: number })[]>;
   getKbArticle(id: string): Promise<(KbArticle & { categoryName?: string; authorName?: string; viewCount?: number; helpfulCount?: number; notHelpfulCount?: number }) | undefined>;
   createKbArticle(data: InsertKbArticle): Promise<KbArticle>;
   updateKbArticle(id: string, data: Partial<InsertKbArticle>): Promise<KbArticle | undefined>;
@@ -1013,6 +1021,19 @@ export class DatabaseStorage implements IStorage {
       metadata: { title: data.title },
     });
 
+    const allCats = await this.listAllTicketCategories();
+    const cat = allCats.find(c => c.id === data.categoryId);
+    const checklistTemplate = (cat as any)?.checklistTemplate;
+    if (checklistTemplate && Array.isArray(checklistTemplate) && checklistTemplate.length > 0) {
+      for (const item of checklistTemplate) {
+        await db.insert(ticketChecklistItems).values({
+          ticketId: ticket.id,
+          key: item.key,
+          label: item.label,
+        });
+      }
+    }
+
     return ticket;
   }
 
@@ -1358,6 +1379,7 @@ export class DatabaseStorage implements IStorage {
     storageName: string;
     mimeType: string;
     sizeBytes: number;
+    attachmentKey?: string;
   }): Promise<TicketAttachment> {
     const [ticket] = await db.select().from(tickets).where(eq(tickets.id, ticketId));
     if (!ticket) throw new Error("Ticket not found");
@@ -1371,7 +1393,11 @@ export class DatabaseStorage implements IStorage {
     const [attachment] = await db.insert(ticketAttachments).values({
       ticketId,
       uploadedBy: authorUser.id,
-      ...fileMeta,
+      originalName: fileMeta.originalName,
+      storageName: fileMeta.storageName,
+      mimeType: fileMeta.mimeType,
+      sizeBytes: fileMeta.sizeBytes,
+      attachmentKey: fileMeta.attachmentKey || null,
     }).returning();
 
     await db.insert(ticketEvents).values({
@@ -1418,6 +1444,47 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(ticketAttachments)
       .where(eq(ticketAttachments.ticketId, ticketId))
       .orderBy(asc(ticketAttachments.createdAt));
+  }
+
+  async getTicketAttachmentRequirements(ticketId: string): Promise<Array<{ key: string; label: string; mime?: string[]; required?: boolean; satisfied: boolean }>> {
+    const [ticket] = await db.select().from(tickets).where(eq(tickets.id, ticketId));
+    if (!ticket) return [];
+    const allCats = await this.listAllTicketCategories();
+    const category = allCats.find(c => c.id === ticket.categoryId);
+    const reqAttachments = (category as any)?.requiredAttachments || [];
+    if (!reqAttachments.length) return [];
+
+    const existingAttachments = await db.select().from(ticketAttachments)
+      .where(eq(ticketAttachments.ticketId, ticketId));
+    const existingKeys = new Set(existingAttachments.map(a => a.attachmentKey).filter(Boolean));
+
+    return reqAttachments.map((ra: any) => ({
+      key: ra.key,
+      label: ra.label,
+      mime: ra.mime,
+      required: ra.required,
+      satisfied: existingKeys.has(ra.key),
+    }));
+  }
+
+  async listTicketChecklistItems(ticketId: string): Promise<TicketChecklistItem[]> {
+    return db.select().from(ticketChecklistItems)
+      .where(eq(ticketChecklistItems.ticketId, ticketId))
+      .orderBy(asc(ticketChecklistItems.createdAt));
+  }
+
+  async updateChecklistItem(ticketId: string, itemId: string, isDone: boolean, userId: string): Promise<TicketChecklistItem | undefined> {
+    const [item] = await db.select().from(ticketChecklistItems)
+      .where(and(eq(ticketChecklistItems.id, itemId), eq(ticketChecklistItems.ticketId, ticketId)));
+    if (!item) return undefined;
+
+    const [updated] = await db.update(ticketChecklistItems).set({
+      isDone,
+      doneBy: isDone ? userId : null,
+      doneAt: isDone ? new Date() : null,
+    }).where(eq(ticketChecklistItems.id, itemId)).returning();
+
+    return updated;
   }
 
   async getAdminUserIds(): Promise<string[]> {
@@ -1535,13 +1602,25 @@ export class DatabaseStorage implements IStorage {
     return rows.map(r => r.userId);
   }
 
-  async listKbArticles(filters: { categoryId?: string; q?: string; publishedOnly?: boolean }): Promise<(KbArticle & { categoryName?: string; authorName?: string; viewCount?: number; helpfulCount?: number; notHelpfulCount?: number })[]> {
+  async listKbArticles(filters: { categoryId?: string; q?: string; tags?: string[]; publishedOnly?: boolean }): Promise<(KbArticle & { categoryName?: string; authorName?: string; viewCount?: number; helpfulCount?: number; notHelpfulCount?: number })[]> {
     const conditions: any[] = [];
     if (filters.publishedOnly) {
       conditions.push(eq(kbArticles.isPublished, true));
     }
-    if (filters.categoryId) {
+    if (filters.categoryId && !filters.tags?.length) {
       conditions.push(eq(kbArticles.categoryId, filters.categoryId));
+    }
+    if (filters.tags?.length && filters.categoryId) {
+      const allCats = await this.listAllTicketCategories();
+      const matchingCatIds = allCats
+        .filter(c => {
+          const catTags = (c as any)?.kbTags as string[] | undefined;
+          if (!catTags?.length) return false;
+          return filters.tags!.some(t => catTags.includes(t));
+        })
+        .map(c => c.id);
+      const allIds = [...new Set([filters.categoryId, ...matchingCatIds])];
+      conditions.push(inArray(kbArticles.categoryId, allIds));
     }
     if (filters.q) {
       conditions.push(or(

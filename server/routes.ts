@@ -1227,17 +1227,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       if (category.formSchema && Array.isArray(category.formSchema) && category.formSchema.length > 0) {
         const reqData = parsed.data.requestData || {};
-        const missing: string[] = [];
+        const issues: Array<{ key: string; message: string }> = [];
         for (const field of category.formSchema) {
+          const val = reqData[field.key];
+          const strVal = typeof val === "string" ? val.trim() : "";
+
           if (field.required) {
-            const val = reqData[field.key];
-            if (val === undefined || val === null || (typeof val === "string" && !val.trim())) {
-              missing.push(field.key);
+            if (val === undefined || val === null || (typeof val === "string" && !strVal)) {
+              issues.push({ key: field.key, message: `${field.label} é obrigatório` });
+              continue;
+            }
+          }
+
+          if (val !== undefined && val !== null && strVal) {
+            if (field.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(strVal)) {
+              issues.push({ key: field.key, message: `${field.label} deve ser um email válido` });
+            }
+            if (field.rules) {
+              const r = field.rules;
+              if (r.regex) {
+                try { if (!new RegExp(r.regex).test(strVal)) issues.push({ key: field.key, message: `${field.label} não corresponde ao padrão esperado` }); } catch {}
+              }
+              if (r.minLen !== undefined && strVal.length < r.minLen) {
+                issues.push({ key: field.key, message: `${field.label} deve ter pelo menos ${r.minLen} caracteres` });
+              }
+              if (r.maxLen !== undefined && strVal.length > r.maxLen) {
+                issues.push({ key: field.key, message: `${field.label} deve ter no máximo ${r.maxLen} caracteres` });
+              }
+              if (field.type === "number") {
+                const numVal = Number(val);
+                if (r.min !== undefined && numVal < r.min) {
+                  issues.push({ key: field.key, message: `${field.label} deve ser no mínimo ${r.min}` });
+                }
+                if (r.max !== undefined && numVal > r.max) {
+                  issues.push({ key: field.key, message: `${field.label} deve ser no máximo ${r.max}` });
+                }
+              }
             }
           }
         }
-        if (missing.length > 0) {
-          return res.status(400).json({ error: "Campos obrigatórios faltando", missing });
+        if (issues.length > 0) {
+          return res.status(400).json({ error: "Validação falhou", issues });
         }
       }
 
@@ -1478,6 +1508,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         storageName: req.file.filename,
         mimeType: req.file.mimetype,
         sizeBytes: req.file.size,
+        attachmentKey: (req.body?.attachmentKey as string) || undefined,
       });
       res.status(201).json(attachment);
     } catch (error: any) {
@@ -1510,6 +1541,86 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (error) {
       console.error("Error downloading attachment:", error);
       res.status(500).json({ error: "Failed to download attachment" });
+    }
+  });
+
+  app.get("/api/tickets/:id/attachments/requirements", requireAuth, async (req, res) => {
+    try {
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+      const requirements = await storage.getTicketAttachmentRequirements(req.params.id);
+      res.json(requirements);
+    } catch (error) {
+      console.error("Error fetching attachment requirements:", error);
+      res.status(500).json({ error: "Failed to fetch attachment requirements" });
+    }
+  });
+
+  app.get("/api/tickets/:id/checklist", requireAuth, async (req, res) => {
+    try {
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+      const items = await storage.listTicketChecklistItems(req.params.id);
+      res.json(items);
+    } catch (error) {
+      console.error("Error fetching checklist:", error);
+      res.status(500).json({ error: "Failed to fetch checklist" });
+    }
+  });
+
+  app.patch("/api/tickets/:id/checklist/:itemId", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const bodySchema = z.object({ isDone: z.boolean() });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Dados inválidos" });
+
+      const updated = await storage.updateChecklistItem(req.params.id, req.params.itemId, parsed.data.isDone, req.user!.id);
+      if (!updated) return res.status(404).json({ error: "Item não encontrado" });
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating checklist item:", error);
+      res.status(500).json({ error: "Failed to update checklist item" });
+    }
+  });
+
+  app.post("/api/tickets/:id/request-info", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+
+      const requirements = await storage.getTicketAttachmentRequirements(req.params.id);
+      const missingReqs = requirements.filter(r => r.required && !r.satisfied);
+
+      const allCats = await storage.listAllTicketCategories();
+      const category = allCats.find(c => c.id === ticket.categoryId);
+      const formSchema = (category as any)?.formSchema || [];
+      const reqData = ticket.requestData || {};
+      const missingFields = formSchema
+        .filter((f: any) => f.required && (!reqData[f.key] || (typeof reqData[f.key] === "string" && !reqData[f.key].trim())))
+        .map((f: any) => f.label);
+
+      const missingItems: string[] = [];
+      if (missingReqs.length > 0) missingItems.push(...missingReqs.map(r => r.label));
+      if (missingFields.length > 0) missingItems.push(...missingFields);
+
+      if (missingItems.length === 0) {
+        return res.status(400).json({ error: "Nenhuma informação pendente detectada" });
+      }
+
+      if (ticket.status !== "AGUARDANDO_USUARIO") {
+        await storage.adminUpdateTicket(req.params.id, { status: "AGUARDANDO_USUARIO" }, req.user!);
+      }
+
+      const commentBody = `Informações pendentes:\n${missingItems.map(i => `• ${i}`).join("\n")}`;
+      await storage.addTicketComment(req.params.id, req.user!, {
+        body: commentBody,
+        isInternal: false,
+      });
+
+      res.json({ message: "Status alterado para Aguardando Usuário", missing: missingItems });
+    } catch (error) {
+      console.error("Error requesting info:", error);
+      res.status(500).json({ error: "Failed to request info" });
     }
   });
 
@@ -1580,8 +1691,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           type: z.enum(["text", "email", "number", "textarea", "select"]),
           required: z.boolean().optional(),
           options: z.array(z.string()).optional(),
+          placeholder: z.string().optional(),
+          helpText: z.string().optional(),
+          rules: z.object({
+            regex: z.string().optional(),
+            minLen: z.number().optional(),
+            maxLen: z.number().optional(),
+            min: z.number().optional(),
+            max: z.number().optional(),
+          }).optional(),
         })).nullable().optional(),
         templateApplyMode: z.enum(["replace_if_empty", "always_replace", "append"]).optional(),
+        requiredAttachments: z.array(z.object({
+          key: z.string().min(1),
+          label: z.string().min(1),
+          mime: z.array(z.string()).optional(),
+          required: z.boolean().optional(),
+        })).nullable().optional(),
+        checklistTemplate: z.array(z.object({
+          key: z.string().min(1),
+          label: z.string().min(1),
+        })).nullable().optional(),
+        kbTags: z.array(z.string()).nullable().optional(),
+        autoAwaitOnMissing: z.boolean().optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) {
@@ -1757,9 +1889,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/kb", requireAuth, async (req, res) => {
     try {
+      const categoryId = req.query.categoryId as string | undefined;
+      let tags: string[] | undefined;
+      if (categoryId) {
+        const allCats = await storage.listAllTicketCategories();
+        const cat = allCats.find(c => c.id === categoryId);
+        const catTags = (cat as any)?.kbTags;
+        if (catTags && Array.isArray(catTags) && catTags.length > 0) {
+          tags = catTags;
+        }
+      }
+      if (req.query.tags) {
+        const qTags = (req.query.tags as string).split(",").map(t => t.trim()).filter(Boolean);
+        tags = tags ? [...new Set([...tags, ...qTags])] : qTags;
+      }
       const articles = await storage.listKbArticles({
-        categoryId: req.query.categoryId as string | undefined,
+        categoryId,
         q: req.query.q as string | undefined,
+        tags,
         publishedOnly: true,
       });
       res.json(articles);

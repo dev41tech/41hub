@@ -26,7 +26,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Loader2, FileText, BookOpen, ThumbsUp, ExternalLink } from "lucide-react";
+import { ArrowLeft, Loader2, FileText, BookOpen, ThumbsUp, ExternalLink, Paperclip } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -121,8 +121,12 @@ export default function TicketsNew() {
     }
   }
 
-  const selectedFormSchema: Array<{ key: string; label: string; type: string; required?: boolean; options?: string[] }> =
-    (selectedCategory as any)?.formSchema || [];
+  type FormFieldRule = { regex?: string; minLen?: number; maxLen?: number; min?: number; max?: number };
+  type FormField = { key: string; label: string; type: string; required?: boolean; options?: string[]; placeholder?: string; helpText?: string; rules?: FormFieldRule };
+  type RequiredAttachment = { key: string; label: string; mime?: string[]; required?: boolean };
+
+  const selectedFormSchema: FormField[] = (selectedCategory as any)?.formSchema || [];
+  const selectedRequiredAttachments: RequiredAttachment[] = (selectedCategory as any)?.requiredAttachments || [];
 
   function handleInsertTemplate() {
     if (description.trim()) {
@@ -305,10 +309,14 @@ export default function TicketsNew() {
                           {field.label}
                           {field.required && <span className="text-destructive ml-1">*</span>}
                         </Label>
+                        {field.helpText && (
+                          <p className="text-xs text-muted-foreground">{field.helpText}</p>
+                        )}
                         {field.type === "textarea" ? (
                           <Textarea
                             value={requestData[field.key] || ""}
                             onChange={e => setRequestData(prev => ({ ...prev, [field.key]: e.target.value }))}
+                            placeholder={field.placeholder}
                             rows={3}
                             data-testid={`field-${field.key}`}
                           />
@@ -318,7 +326,7 @@ export default function TicketsNew() {
                             onValueChange={v => setRequestData(prev => ({ ...prev, [field.key]: v }))}
                           >
                             <SelectTrigger data-testid={`field-${field.key}`}>
-                              <SelectValue placeholder="Selecione..." />
+                              <SelectValue placeholder={field.placeholder || "Selecione..."} />
                             </SelectTrigger>
                             <SelectContent>
                               {field.options.map(opt => (
@@ -331,11 +339,52 @@ export default function TicketsNew() {
                             type={field.type === "email" ? "email" : field.type === "number" ? "number" : "text"}
                             value={requestData[field.key] || ""}
                             onChange={e => setRequestData(prev => ({ ...prev, [field.key]: e.target.value }))}
+                            placeholder={field.placeholder}
+                            min={field.rules?.min}
+                            max={field.rules?.max}
+                            minLength={field.rules?.minLen}
+                            maxLength={field.rules?.maxLen}
                             data-testid={`field-${field.key}`}
                           />
                         )}
+                        {field.rules && (
+                          <div className="text-[10px] text-muted-foreground flex gap-2 flex-wrap">
+                            {field.rules.minLen && <span>Mín. {field.rules.minLen} chars</span>}
+                            {field.rules.maxLen && <span>Máx. {field.rules.maxLen} chars</span>}
+                            {field.rules.min !== undefined && <span>Mín. {field.rules.min}</span>}
+                            {field.rules.max !== undefined && <span>Máx. {field.rules.max}</span>}
+                            {field.rules.regex && <span>Padrão: {field.rules.regex}</span>}
+                          </div>
+                        )}
                       </div>
                     ))}
+                  </CardContent>
+                </Card>
+              )}
+
+              {selectedRequiredAttachments.length > 0 && (
+                <Card className="border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-950/20">
+                  <CardContent className="p-4 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Paperclip className="h-4 w-4 text-orange-600" />
+                      <p className="text-sm font-medium">Anexos necessários</p>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Os anexos abaixo devem ser enviados após a criação do chamado.
+                    </p>
+                    <div className="space-y-1">
+                      {selectedRequiredAttachments.map(att => (
+                        <div key={att.key} className="flex items-center gap-2 text-sm" data-testid={`required-att-${att.key}`}>
+                          <Badge variant={att.required ? "destructive" : "outline"} className="text-[10px]">
+                            {att.required ? "obrigatório" : "opcional"}
+                          </Badge>
+                          <span>{att.label}</span>
+                          {att.mime && att.mime.length > 0 && (
+                            <span className="text-xs text-muted-foreground">({att.mime.join(", ")})</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </CardContent>
                 </Card>
               )}

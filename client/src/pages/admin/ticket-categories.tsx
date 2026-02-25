@@ -31,11 +31,22 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import { ArrowLeft, Plus, Pencil, Trash2, RotateCcw, Loader2, FolderTree } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { TicketCategory } from "@shared/schema";
 
 type DialogMode = "branch" | "subcategory" | "edit";
+
+type FormFieldRule = { regex?: string; minLen?: number; maxLen?: number; min?: number; max?: number };
+type FormField = { key: string; label: string; type: string; required: boolean; options?: string[]; placeholder?: string; helpText?: string; rules?: FormFieldRule };
+type RequiredAttachment = { key: string; label: string; mime?: string[]; required?: boolean };
+type ChecklistItem = { key: string; label: string };
 
 export default function AdminTicketCategories(props: { embedded?: boolean } & Record<string, any>) {
   const embedded = props.embedded ?? false;
@@ -48,14 +59,36 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
   const [parentId, setParentId] = useState<string>("none");
   const [descriptionTemplate, setDescriptionTemplate] = useState("");
   const [showInactive, setShowInactive] = useState(false);
-  const [formFields, setFormFields] = useState<Array<{ key: string; label: string; type: string; required: boolean; options?: string[] }>>([]);
+  const [formFields, setFormFields] = useState<FormField[]>([]);
   const [templateApplyMode, setTemplateApplyMode] = useState("replace_if_empty");
   const [newFieldKey, setNewFieldKey] = useState("");
   const [newFieldLabel, setNewFieldLabel] = useState("");
   const [newFieldType, setNewFieldType] = useState("text");
   const [newFieldRequired, setNewFieldRequired] = useState(false);
   const [newFieldOptions, setNewFieldOptions] = useState("");
+  const [newFieldPlaceholder, setNewFieldPlaceholder] = useState("");
+  const [newFieldHelpText, setNewFieldHelpText] = useState("");
+  const [newFieldRegex, setNewFieldRegex] = useState("");
+  const [newFieldMinLen, setNewFieldMinLen] = useState("");
+  const [newFieldMaxLen, setNewFieldMaxLen] = useState("");
+  const [newFieldMin, setNewFieldMin] = useState("");
+  const [newFieldMax, setNewFieldMax] = useState("");
   const [showAddField, setShowAddField] = useState(false);
+
+  const [requiredAttachments, setRequiredAttachments] = useState<RequiredAttachment[]>([]);
+  const [showAddAttachment, setShowAddAttachment] = useState(false);
+  const [newAttKey, setNewAttKey] = useState("");
+  const [newAttLabel, setNewAttLabel] = useState("");
+  const [newAttMime, setNewAttMime] = useState("");
+  const [newAttRequired, setNewAttRequired] = useState(true);
+
+  const [checklistTemplate, setChecklistTemplate] = useState<ChecklistItem[]>([]);
+  const [showAddChecklist, setShowAddChecklist] = useState(false);
+  const [newCheckKey, setNewCheckKey] = useState("");
+  const [newCheckLabel, setNewCheckLabel] = useState("");
+
+  const [kbTags, setKbTags] = useState("");
+  const [autoAwaitOnMissing, setAutoAwaitOnMissing] = useState(false);
 
   const { data: categories = [], isLoading } = useQuery<TicketCategory[]>({
     queryKey: ["/api/admin/tickets/categories"],
@@ -78,6 +111,10 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
           if (parent) payload.branch = parent.branch;
           payload.formSchema = formFields.length > 0 ? formFields : null;
           payload.templateApplyMode = templateApplyMode;
+          payload.requiredAttachments = requiredAttachments.length > 0 ? requiredAttachments : null;
+          payload.checklistTemplate = checklistTemplate.length > 0 ? checklistTemplate : null;
+          payload.kbTags = kbTags.trim() ? kbTags.split(",").map(t => t.trim()).filter(Boolean) : null;
+          payload.autoAwaitOnMissing = autoAwaitOnMissing;
         }
         return (await apiRequest("PATCH", `/api/admin/tickets/categories/${editing.id}`, payload)).json();
       }
@@ -127,11 +164,23 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
     setFormFields([]);
     setTemplateApplyMode("replace_if_empty");
     setShowAddField(false);
-    setNewFieldKey("");
-    setNewFieldLabel("");
-    setNewFieldType("text");
-    setNewFieldRequired(false);
-    setNewFieldOptions("");
+    resetFieldForm();
+    setRequiredAttachments([]);
+    setShowAddAttachment(false);
+    setNewAttKey(""); setNewAttLabel(""); setNewAttMime(""); setNewAttRequired(true);
+    setChecklistTemplate([]);
+    setShowAddChecklist(false);
+    setNewCheckKey(""); setNewCheckLabel("");
+    setKbTags("");
+    setAutoAwaitOnMissing(false);
+  }
+
+  function resetFieldForm() {
+    setNewFieldKey(""); setNewFieldLabel(""); setNewFieldType("text");
+    setNewFieldRequired(false); setNewFieldOptions("");
+    setNewFieldPlaceholder(""); setNewFieldHelpText("");
+    setNewFieldRegex(""); setNewFieldMinLen(""); setNewFieldMaxLen("");
+    setNewFieldMin(""); setNewFieldMax("");
   }
 
   function openCreateBranch() {
@@ -158,12 +207,26 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
     setDescriptionTemplate(cat.descriptionTemplate || "");
     setFormFields(((cat as any).formSchema || []).map((f: any) => ({ ...f, required: f.required ?? false })));
     setTemplateApplyMode((cat as any).templateApplyMode || "replace_if_empty");
+    setRequiredAttachments((cat as any).requiredAttachments || []);
+    setChecklistTemplate((cat as any).checklistTemplate || []);
+    const tags = (cat as any).kbTags;
+    setKbTags(tags && Array.isArray(tags) ? tags.join(", ") : "");
+    setAutoAwaitOnMissing((cat as any).autoAwaitOnMissing || false);
     setShowAddField(false);
+    setShowAddAttachment(false);
+    setShowAddChecklist(false);
     setDialogOpen(true);
   }
 
   function addFormField() {
     if (!newFieldKey.trim() || !newFieldLabel.trim()) return;
+    const rules: FormFieldRule = {};
+    if (newFieldRegex.trim()) rules.regex = newFieldRegex.trim();
+    if (newFieldMinLen) rules.minLen = Number(newFieldMinLen);
+    if (newFieldMaxLen) rules.maxLen = Number(newFieldMaxLen);
+    if (newFieldMin) rules.min = Number(newFieldMin);
+    if (newFieldMax) rules.max = Number(newFieldMax);
+
     setFormFields(prev => [
       ...prev,
       {
@@ -174,18 +237,39 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
         ...(newFieldType === "select" && newFieldOptions.trim()
           ? { options: newFieldOptions.split(",").map(o => o.trim()).filter(Boolean) }
           : {}),
+        ...(newFieldPlaceholder.trim() ? { placeholder: newFieldPlaceholder.trim() } : {}),
+        ...(newFieldHelpText.trim() ? { helpText: newFieldHelpText.trim() } : {}),
+        ...(Object.keys(rules).length > 0 ? { rules } : {}),
       },
     ]);
-    setNewFieldKey("");
-    setNewFieldLabel("");
-    setNewFieldType("text");
-    setNewFieldRequired(false);
-    setNewFieldOptions("");
+    resetFieldForm();
     setShowAddField(false);
   }
 
   function removeFormField(key: string) {
     setFormFields(prev => prev.filter(f => f.key !== key));
+  }
+
+  function addRequiredAttachment() {
+    if (!newAttKey.trim() || !newAttLabel.trim()) return;
+    setRequiredAttachments(prev => [
+      ...prev,
+      {
+        key: newAttKey.trim(),
+        label: newAttLabel.trim(),
+        ...(newAttMime.trim() ? { mime: newAttMime.split(",").map(m => m.trim()).filter(Boolean) } : {}),
+        required: newAttRequired,
+      },
+    ]);
+    setNewAttKey(""); setNewAttLabel(""); setNewAttMime(""); setNewAttRequired(true);
+    setShowAddAttachment(false);
+  }
+
+  function addChecklistItem() {
+    if (!newCheckKey.trim() || !newCheckLabel.trim()) return;
+    setChecklistTemplate(prev => [...prev, { key: newCheckKey.trim(), label: newCheckLabel.trim() }]);
+    setNewCheckKey(""); setNewCheckLabel("");
+    setShowAddChecklist(false);
   }
 
   const filteredCategories = showInactive
@@ -210,6 +294,8 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
     if (bIsRoot) return 1;
     return a.name.localeCompare(b.name);
   });
+
+  const isSubcategory = (editing && editing.parentId) || dialogMode === "subcategory";
 
   return (
     <div className={embedded ? "flex flex-col gap-4" : "flex flex-col gap-6 p-6"}>
@@ -289,6 +375,8 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
               <TableBody>
                 {sortedCategories.map(cat => {
                   const isRoot = !cat.parentId;
+                  const attachCount = ((cat as any).requiredAttachments || []).length;
+                  const checkCount = ((cat as any).checklistTemplate || []).length;
                   return (
                     <TableRow key={cat.id} className={!cat.isActive ? "opacity-60" : ""} data-testid={`category-${cat.id}`}>
                       <TableCell className={isRoot ? "font-semibold" : "pl-8"}>
@@ -312,11 +400,20 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
                         )}
                       </TableCell>
                       <TableCell>
-                        {(cat as any).formSchema && (cat as any).formSchema.length > 0 ? (
-                          <Badge variant="secondary" className="text-xs">{(cat as any).formSchema.length} campos</Badge>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
+                        <div className="flex gap-1 flex-wrap">
+                          {(cat as any).formSchema && (cat as any).formSchema.length > 0 && (
+                            <Badge variant="secondary" className="text-xs">{(cat as any).formSchema.length} campos</Badge>
+                          )}
+                          {attachCount > 0 && (
+                            <Badge variant="outline" className="text-xs">{attachCount} anexos</Badge>
+                          )}
+                          {checkCount > 0 && (
+                            <Badge variant="outline" className="text-xs">{checkCount} checks</Badge>
+                          )}
+                          {!((cat as any).formSchema?.length || attachCount || checkCount) && (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Badge variant={cat.isActive ? "default" : "secondary"}>
@@ -357,7 +454,7 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
       </Card>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {editing
@@ -367,57 +464,65 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
                 : "Nova Subcategoria"}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Nome</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} data-testid="input-category-name" />
-            </div>
 
-            {dialogMode === "subcategory" && !editing && (
-              <div className="space-y-2">
-                <Label>Branch (pai)</Label>
-                <Select value={parentId} onValueChange={setParentId}>
-                  <SelectTrigger data-testid="select-parent">
-                    <SelectValue placeholder="Selecione a branch" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {activeRoots.map(r => (
-                      <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+          {isSubcategory ? (
+            <Tabs defaultValue="general" className="w-full">
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="general">Geral</TabsTrigger>
+                <TabsTrigger value="form">Formulário</TabsTrigger>
+                <TabsTrigger value="attachments">Anexos</TabsTrigger>
+                <TabsTrigger value="checklist">Checklist</TabsTrigger>
+              </TabsList>
 
-            {editing && editing.parentId && (
-              <div className="space-y-2">
-                <Label>Branch (pai)</Label>
-                <Select value={parentId} onValueChange={setParentId}>
-                  <SelectTrigger data-testid="select-parent">
-                    <SelectValue placeholder="Selecione a branch" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {roots.map(r => (
-                      <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+              <TabsContent value="general" className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label>Nome</Label>
+                  <Input value={name} onChange={(e) => setName(e.target.value)} data-testid="input-category-name" />
+                </div>
 
-            <div className="space-y-2">
-              <Label>Template de Descrição (opcional)</Label>
-              <Textarea
-                value={descriptionTemplate}
-                onChange={(e) => setDescriptionTemplate(e.target.value)}
-                placeholder="Template que será preenchido automaticamente ao selecionar esta categoria..."
-                rows={4}
-                data-testid="input-description-template"
-              />
-            </div>
+                {dialogMode === "subcategory" && !editing && (
+                  <div className="space-y-2">
+                    <Label>Branch (pai)</Label>
+                    <Select value={parentId} onValueChange={setParentId}>
+                      <SelectTrigger data-testid="select-parent">
+                        <SelectValue placeholder="Selecione a branch" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {activeRoots.map(r => (
+                          <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
-            {((editing && editing.parentId) || dialogMode === "subcategory") && (
-              <>
+                {editing && editing.parentId && (
+                  <div className="space-y-2">
+                    <Label>Branch (pai)</Label>
+                    <Select value={parentId} onValueChange={setParentId}>
+                      <SelectTrigger data-testid="select-parent">
+                        <SelectValue placeholder="Selecione a branch" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {roots.map(r => (
+                          <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <Label>Template de Descrição (opcional)</Label>
+                  <Textarea
+                    value={descriptionTemplate}
+                    onChange={(e) => setDescriptionTemplate(e.target.value)}
+                    placeholder="Template que será preenchido automaticamente..."
+                    rows={3}
+                    data-testid="input-description-template"
+                  />
+                </div>
+
                 <div className="space-y-2">
                   <Label>Modo do template</Label>
                   <Select value={templateApplyMode} onValueChange={setTemplateApplyMode}>
@@ -433,81 +538,261 @@ export default function AdminTicketCategories(props: { embedded?: boolean } & Re
                 </div>
 
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label>Formulário da categoria</Label>
-                    <Button type="button" variant="outline" size="sm" onClick={() => setShowAddField(!showAddField)} data-testid="button-toggle-add-field">
-                      <Plus className="h-3 w-3 mr-1" />
-                      Campo
+                  <Label>Tags KB (para sugestão de artigos, separar por vírgula)</Label>
+                  <Input
+                    value={kbTags}
+                    onChange={(e) => setKbTags(e.target.value)}
+                    placeholder="hardware, impressora, rede"
+                    data-testid="input-kb-tags"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Switch checked={autoAwaitOnMissing} onCheckedChange={setAutoAwaitOnMissing} data-testid="switch-auto-await" />
+                  <Label className="text-sm">Habilitar botão "Pedir infos" (quando faltar dados/anexos)</Label>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="form" className="space-y-4 mt-4">
+                <div className="flex items-center justify-between">
+                  <Label>Campos do formulário</Label>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setShowAddField(!showAddField)} data-testid="button-toggle-add-field">
+                    <Plus className="h-3 w-3 mr-1" />
+                    Campo
+                  </Button>
+                </div>
+
+                {formFields.length > 0 && (
+                  <div className="space-y-1">
+                    {formFields.map(f => (
+                      <div key={f.key} className="flex items-center justify-between border rounded px-2 py-1 text-sm">
+                        <div className="flex-1 min-w-0">
+                          <span className="font-medium">{f.label}</span>
+                          <span className="text-muted-foreground ml-1">({f.type})</span>
+                          {f.required && <Badge variant="destructive" className="ml-1 text-xs">obr.</Badge>}
+                          {f.rules && Object.keys(f.rules).length > 0 && (
+                            <Badge variant="outline" className="ml-1 text-xs">regras</Badge>
+                          )}
+                        </div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => removeFormField(f.key)} data-testid={`remove-field-${f.key}`}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {showAddField && (
+                  <div className="border rounded-lg p-3 space-y-2 bg-muted/50">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-xs">Chave</Label>
+                        <Input value={newFieldKey} onChange={e => setNewFieldKey(e.target.value)} placeholder="nome_campo" className="h-8" data-testid="input-field-key" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Rótulo</Label>
+                        <Input value={newFieldLabel} onChange={e => setNewFieldLabel(e.target.value)} placeholder="Nome do Campo" className="h-8" data-testid="input-field-label" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-xs">Tipo</Label>
+                        <Select value={newFieldType} onValueChange={setNewFieldType}>
+                          <SelectTrigger className="h-8" data-testid="select-field-type">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="text">Texto</SelectItem>
+                            <SelectItem value="email">Email</SelectItem>
+                            <SelectItem value="number">Número</SelectItem>
+                            <SelectItem value="textarea">Texto longo</SelectItem>
+                            <SelectItem value="select">Seleção</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="flex items-end gap-2">
+                        <label className="flex items-center gap-1 text-xs cursor-pointer pb-2">
+                          <Switch checked={newFieldRequired} onCheckedChange={setNewFieldRequired} />
+                          Obrigatório
+                        </label>
+                      </div>
+                    </div>
+                    {newFieldType === "select" && (
+                      <div>
+                        <Label className="text-xs">Opções (separar por vírgula)</Label>
+                        <Input value={newFieldOptions} onChange={e => setNewFieldOptions(e.target.value)} placeholder="Opção 1, Opção 2" className="h-8" data-testid="input-field-options" />
+                      </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-xs">Placeholder (opcional)</Label>
+                        <Input value={newFieldPlaceholder} onChange={e => setNewFieldPlaceholder(e.target.value)} placeholder="Ex: Digite aqui..." className="h-8" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Texto de ajuda (opcional)</Label>
+                        <Input value={newFieldHelpText} onChange={e => setNewFieldHelpText(e.target.value)} placeholder="Ex: Formato esperado..." className="h-8" />
+                      </div>
+                    </div>
+                    <details className="text-xs">
+                      <summary className="cursor-pointer text-muted-foreground">Regras de validação (avançado)</summary>
+                      <div className="grid grid-cols-3 gap-2 mt-2">
+                        <div>
+                          <Label className="text-xs">Regex</Label>
+                          <Input value={newFieldRegex} onChange={e => setNewFieldRegex(e.target.value)} placeholder="^[A-Z]+" className="h-7 text-xs" />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Min. chars</Label>
+                          <Input type="number" value={newFieldMinLen} onChange={e => setNewFieldMinLen(e.target.value)} className="h-7 text-xs" />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Max. chars</Label>
+                          <Input type="number" value={newFieldMaxLen} onChange={e => setNewFieldMaxLen(e.target.value)} className="h-7 text-xs" />
+                        </div>
+                        {newFieldType === "number" && (
+                          <>
+                            <div>
+                              <Label className="text-xs">Min. valor</Label>
+                              <Input type="number" value={newFieldMin} onChange={e => setNewFieldMin(e.target.value)} className="h-7 text-xs" />
+                            </div>
+                            <div>
+                              <Label className="text-xs">Max. valor</Label>
+                              <Input type="number" value={newFieldMax} onChange={e => setNewFieldMax(e.target.value)} className="h-7 text-xs" />
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </details>
+                    <Button type="button" size="sm" onClick={addFormField} disabled={!newFieldKey.trim() || !newFieldLabel.trim()} data-testid="button-add-field">
+                      Adicionar campo
                     </Button>
                   </div>
+                )}
+              </TabsContent>
 
-                  {formFields.length > 0 && (
-                    <div className="space-y-1">
-                      {formFields.map(f => (
-                        <div key={f.key} className="flex items-center justify-between border rounded px-2 py-1 text-sm">
-                          <div>
-                            <span className="font-medium">{f.label}</span>
-                            <span className="text-muted-foreground ml-1">({f.type})</span>
-                            {f.required && <Badge variant="destructive" className="ml-1 text-xs">obr.</Badge>}
-                          </div>
-                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => removeFormField(f.key)} data-testid={`remove-field-${f.key}`}>
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {showAddField && (
-                    <div className="border rounded-lg p-3 space-y-2 bg-muted/50">
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <Label className="text-xs">Chave</Label>
-                          <Input value={newFieldKey} onChange={e => setNewFieldKey(e.target.value)} placeholder="nome_campo" className="h-8" data-testid="input-field-key" />
-                        </div>
-                        <div>
-                          <Label className="text-xs">Rótulo</Label>
-                          <Input value={newFieldLabel} onChange={e => setNewFieldLabel(e.target.value)} placeholder="Nome do Campo" className="h-8" data-testid="input-field-label" />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <Label className="text-xs">Tipo</Label>
-                          <Select value={newFieldType} onValueChange={setNewFieldType}>
-                            <SelectTrigger className="h-8" data-testid="select-field-type">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="text">Texto</SelectItem>
-                              <SelectItem value="email">Email</SelectItem>
-                              <SelectItem value="number">Número</SelectItem>
-                              <SelectItem value="textarea">Texto longo</SelectItem>
-                              <SelectItem value="select">Seleção</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="flex items-end gap-2">
-                          <label className="flex items-center gap-1 text-xs cursor-pointer pb-2">
-                            <Switch checked={newFieldRequired} onCheckedChange={setNewFieldRequired} />
-                            Obrigatório
-                          </label>
-                        </div>
-                      </div>
-                      {newFieldType === "select" && (
-                        <div>
-                          <Label className="text-xs">Opções (separar por vírgula)</Label>
-                          <Input value={newFieldOptions} onChange={e => setNewFieldOptions(e.target.value)} placeholder="Opção 1, Opção 2, Opção 3" className="h-8" data-testid="input-field-options" />
-                        </div>
-                      )}
-                      <Button type="button" size="sm" onClick={addFormField} disabled={!newFieldKey.trim() || !newFieldLabel.trim()} data-testid="button-add-field">
-                        Adicionar campo
-                      </Button>
-                    </div>
-                  )}
+              <TabsContent value="attachments" className="space-y-4 mt-4">
+                <div className="flex items-center justify-between">
+                  <Label>Anexos obrigatórios</Label>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setShowAddAttachment(!showAddAttachment)} data-testid="button-toggle-add-attachment">
+                    <Plus className="h-3 w-3 mr-1" />
+                    Anexo
+                  </Button>
                 </div>
-              </>
-            )}
-          </div>
+
+                {requiredAttachments.length > 0 && (
+                  <div className="space-y-1">
+                    {requiredAttachments.map(a => (
+                      <div key={a.key} className="flex items-center justify-between border rounded px-2 py-1 text-sm">
+                        <div>
+                          <span className="font-medium">{a.label}</span>
+                          <span className="text-muted-foreground ml-1">({a.key})</span>
+                          {a.required && <Badge variant="destructive" className="ml-1 text-xs">obr.</Badge>}
+                          {a.mime && a.mime.length > 0 && (
+                            <span className="text-xs text-muted-foreground ml-1">[{a.mime.join(", ")}]</span>
+                          )}
+                        </div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setRequiredAttachments(prev => prev.filter(x => x.key !== a.key))}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {showAddAttachment && (
+                  <div className="border rounded-lg p-3 space-y-2 bg-muted/50">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-xs">Chave</Label>
+                        <Input value={newAttKey} onChange={e => setNewAttKey(e.target.value)} placeholder="print_erro" className="h-8" data-testid="input-att-key" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Rótulo</Label>
+                        <Input value={newAttLabel} onChange={e => setNewAttLabel(e.target.value)} placeholder="Print do erro" className="h-8" data-testid="input-att-label" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-xs">MIME types (opcional, separar por vírgula)</Label>
+                        <Input value={newAttMime} onChange={e => setNewAttMime(e.target.value)} placeholder="image/png, image/jpeg" className="h-8" />
+                      </div>
+                      <div className="flex items-end gap-2">
+                        <label className="flex items-center gap-1 text-xs cursor-pointer pb-2">
+                          <Switch checked={newAttRequired} onCheckedChange={setNewAttRequired} />
+                          Obrigatório
+                        </label>
+                      </div>
+                    </div>
+                    <Button type="button" size="sm" onClick={addRequiredAttachment} disabled={!newAttKey.trim() || !newAttLabel.trim()} data-testid="button-add-attachment">
+                      Adicionar anexo
+                    </Button>
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="checklist" className="space-y-4 mt-4">
+                <div className="flex items-center justify-between">
+                  <Label>Template de checklist</Label>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setShowAddChecklist(!showAddChecklist)} data-testid="button-toggle-add-checklist">
+                    <Plus className="h-3 w-3 mr-1" />
+                    Item
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">Itens de checklist são criados automaticamente ao abrir um chamado nesta categoria.</p>
+
+                {checklistTemplate.length > 0 && (
+                  <div className="space-y-1">
+                    {checklistTemplate.map(c => (
+                      <div key={c.key} className="flex items-center justify-between border rounded px-2 py-1 text-sm">
+                        <div>
+                          <span className="font-medium">{c.label}</span>
+                          <span className="text-muted-foreground ml-1">({c.key})</span>
+                        </div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setChecklistTemplate(prev => prev.filter(x => x.key !== c.key))}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {showAddChecklist && (
+                  <div className="border rounded-lg p-3 space-y-2 bg-muted/50">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-xs">Chave</Label>
+                        <Input value={newCheckKey} onChange={e => setNewCheckKey(e.target.value)} placeholder="criar_usuario" className="h-8" data-testid="input-check-key" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Rótulo</Label>
+                        <Input value={newCheckLabel} onChange={e => setNewCheckLabel(e.target.value)} placeholder="Criar usuário no sistema X" className="h-8" data-testid="input-check-label" />
+                      </div>
+                    </div>
+                    <Button type="button" size="sm" onClick={addChecklistItem} disabled={!newCheckKey.trim() || !newCheckLabel.trim()} data-testid="button-add-checklist">
+                      Adicionar item
+                    </Button>
+                  </div>
+                )}
+              </TabsContent>
+            </Tabs>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Nome</Label>
+                <Input value={name} onChange={(e) => setName(e.target.value)} data-testid="input-category-name" />
+              </div>
+              <div className="space-y-2">
+                <Label>Template de Descrição (opcional)</Label>
+                <Textarea
+                  value={descriptionTemplate}
+                  onChange={(e) => setDescriptionTemplate(e.target.value)}
+                  placeholder="Template que será preenchido automaticamente..."
+                  rows={3}
+                  data-testid="input-description-template"
+                />
+              </div>
+            </div>
+          )}
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>
             <Button

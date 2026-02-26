@@ -1,0 +1,136 @@
+Evoluir o Catálogo de Serviços (Chamados) com validações avançadas, anexos obrigatórios, checklist automático e KB sugerida.
+
+REGRAS:
+- Admin configura tudo.
+- Coordenador abre ticket com dados válidos.
+- Usuário só lê.
+- Não quebrar tickets antigos.
+
+========================================================
+1) DB - extensões de schema
+========================================================
+1.1 ticket_categories (leaf)
+Adicionar:
+- requiredAttachments jsonb default []   // ex: [{ key:"print", label:"Print do erro", mime:["image/png","image/jpeg"], required:true }]
+- checklistTemplate jsonb default []     // ex: [{ key:"criar_usuario", label:"Criar usuário no sistema X" }]
+- kbTags text[] default []               // tags para melhorar sugestão de KB
+
+1.2 ticket_checklist_items
+Criar tabela:
+- id uuid
+- ticketId fk tickets cascade
+- key varchar(80)
+- label varchar(255)
+- isDone bool default false
+- doneBy fk users set null
+- doneAt timestamp null
+- createdAt defaultNow
+Unique(ticketId, key)
+
+1.3 ticket_category_field_rules (opcional, se preferir separar do formSchema)
+Para simplificar, NÃO criar tabela: colocar regras dentro do próprio formSchema.
+Atualizar Field model:
+Field = {
+  key, label, type, required,
+  placeholder?, helpText?, options?,
+  rules?: { regex?: string, minLen?: number, maxLen?: number, min?: number, max?: number }
+}
+
+========================================================
+2) Backend - validação avançada
+========================================================
+2.1 Validação requestData
+No POST /api/tickets:
+- Além de required:
+  - Se field.type == "email": validar formato
+  - Se rules.regex: validar RegExp
+  - Se minLen/maxLen: validar string length
+  - Se min/max: validar number
+Se falhar: 400 com:
+{ error: "Validação falhou", issues: [{ key, message }] }
+
+2.2 Anexos obrigatórios por categoria
+- Categoria define requiredAttachments[] (ex.: “Print do erro” obrigatório)
+- Criar no ticket:
+  - attachmentsRequiredSnapshot jsonb (opcional) ou usar category na hora
+- Regras:
+  - Coordenador pode criar ticket SEM anexos inicialmente, mas:
+     - Ticket inicia como ABERTO
+     - Se requiredAttachments existir e nenhum anexo foi enviado para essas chaves após criação,
+       admin pode marcar como AGUARDANDO_USUARIO e SLA pausa.
+  - Melhor: permitir enviar anexos ainda na tela de criação (TicketNew) após criar ticket:
+     - fluxo: cria ticket -> retorna id -> faz upload(s) -> finaliza.
+
+Implementação prática:
+- ticket_attachments adicionar coluna:
+  - attachmentKey varchar(80) nullable
+- No upload endpoint:
+  - permitir enviar attachmentKey (ex: "print")
+- Criar endpoint:
+  - GET /api/tickets/:id/attachments/requirements
+    retorna requiredAttachments + status de cada (satisfeito ou não)
+
+2.3 Checklist automático
+Ao criar ticket:
+- Se category.checklistTemplate tem itens:
+  - criar ticket_checklist_items para cada item
+No TicketDetail (admin):
+- Mostrar card “Checklist interno”
+- Permitir marcar done/undone (admin only)
+Rotas:
+- GET /api/tickets/:id/checklist
+- PATCH /api/tickets/:id/checklist/:itemId { isDone }
+
+2.4 KB sugerida (mais inteligente)
+- Em GET /api/kb?categoryId:
+  - também aceitar `tags=` e `q=` e priorizar artigos:
+     - match categoryId primeiro
+     - depois match tags (interseção kbTags da categoria + (opcional) tags derivadas de requestData)
+- No TicketNew:
+  - ao selecionar categoria, mostrar artigos sugeridos (já existe)
+  - adicionar mensagem: “Se isso resolver, você evita SLA e retrabalho.”
+
+2.5 Automação “falta de dados => aguardando usuário”
+- Criar regra opcional por categoria:
+  - category.autoAwaitOnMissing = true (bool)
+Se true:
+- Quando admin detectar missing (via endpoint requirements):
+  - botão “Solicitar informações / Pausar SLA”:
+     - muda status para AGUARDANDO_USUARIO
+     - posta comentário automático (não-interno) listando o que falta:
+        “Faltam: Print do erro, Email do usuário...”
+     - SLA pausa (já implementado)
+
+========================================================
+3) Frontend - UI de anexos obrigatórios + checklist + KB
+========================================================
+3.1 TicketNew
+- Após selecionar categoria:
+  - Renderizar form fields
+  - Renderizar bloco “Anexos (se necessário)”:
+     - listar requiredAttachments (label e tipo)
+     - permitir upload (se você quiser antes de criar ticket, usar upload após create com retorno do id)
+- Sugestão KB continua.
+
+3.2 TicketDetail
+- Bloco “Requisitos”:
+  - mostrar requiredAttachments e status (ok/faltando)
+  - para admin: botão “Pedir infos (Aguardar usuário)” se faltar algo
+- Bloco “Checklist interno” (admin):
+  - checklist items com checkbox
+
+3.3 Reports
+- No export de tickets:
+  - incluir % checklist concluída (done/total)
+  - incluir missingAttachmentsCount no momento do fechamento (se quiser, snapshot)
+
+========================================================
+SMOKE
+========================================================
+1) Categoria com rules.regex e required valida corretamente.
+2) Categoria com requiredAttachments mostra requisitos e permite anexar com attachmentKey.
+3) Checklist aparece e marca done.
+4) Botão “Pedir infos” move pra AGUARDANDO_USUARIO e pausa SLA.
+5) KB sugerida aparece com prioridade por categoria/tags.
+
+Garanta npm run check.

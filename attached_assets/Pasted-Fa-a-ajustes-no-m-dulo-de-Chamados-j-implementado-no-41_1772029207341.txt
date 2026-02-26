@@ -1,0 +1,133 @@
+Faça ajustes no módulo de Chamados já implementado no 41-Tech-Hub.
+
+OBJETIVO: aplicar 8 mudanças sem quebrar nada existente, garantindo que regras sejam aplicadas NO BACKEND (não só na UI).
+
+========================================
+(1) Usuário não pode comentar em chamados abertos (nem em nenhum status)
+========================================
+- FRONT:
+  - No componente/página de detalhe do chamado (TicketDetail), esconda completamente o composer de comentário (textarea + botão + upload) quando user.role == "user" (ou equivalente).
+  - Usuário pode APENAS ler comentários (exceto internos), nunca digitar.
+- BACK:
+  - Na rota POST /api/tickets/:id/comments: bloquear se role == user (retornar 403).
+  - Na rota POST /api/tickets/:id/attachments: bloquear se role == user (retornar 403).
+  - Se existirem outras rotas que permitem escrita (ex.: patch status por engano), reforçar guardas.
+
+========================================
+(2) Coordenador não deve ver aba "Admin"
+========================================
+- FRONT:
+  - No menu lateral e nas rotas, renderizar seção/aba Admin somente para role == admin.
+  - Se hoje você mostra a aba Admin para coordinator, ajuste a lógica (ex.: isAdmin = role==="admin").
+- BACK:
+  - Garante que rotas /api/admin/* estejam protegidas por requireAdmin (403 se não-admin), mesmo que alguém tente acessar direto.
+
+========================================
+(3) "Setor Solicitante" no novo chamado: auto-selecionar quando 1 opção
+========================================
+- FRONT (TicketNew):
+  - Buscar setores do usuário (os setores que ele pertence).
+  - Se o usuário tiver EXATAMENTE 1 setor, preencher automaticamente requesterSectorId e esconder o select.
+  - Se tiver >1, mostrar select com essas opções e exigir seleção.
+  - Se tiver 0, mostrar mensagem "Usuário sem setor vinculado" e bloquear submit.
+- BACK:
+  - Ao criar ticket via coordenador, validar que requesterSectorId pertence aos setores do coordenador (ou que ele está vinculado).
+  - Se o ticket create já recebe requesterSectorId, manter, mas reforçar a validação.
+
+========================================
+(4) SLA: admin pode alterar prazo de conclusão dentro do chamado (por ticket/ciclo)
+========================================
+- DB:
+  - Na tabela de SLA cycles (ex.: ticket_sla_cycles), adicionar campos:
+    - resolutionDueAtManual (boolean default false)
+    - resolutionDueAtManualReason (text nullable)
+    - resolutionDueAtUpdatedBy (fk users nullable)
+    - resolutionDueAtUpdatedAt (timestamp nullable)
+  - (Se já existir migration/push, faça drizzle push).
+- BACK:
+  - Permitir em PATCH /api/tickets/:id (admin only) um campo opcional:
+      resolutionDueAtManual: ISO string (UTC)
+      resolutionDueAtManualReason: string opcional
+    Quando vier:
+      - atualizar o cycle atual: resolutionDueAt = valor informado
+      - set resolutionDueAtManual=true
+      - preencher updatedBy/updatedAt/reason
+  - Não mexer em firstResponseDueAt por enquanto (somente resolução).
+- FRONT:
+  - No TicketDetail (admin), exibir “Prazo de conclusão” com botão “Editar prazo”.
+  - Abrir modal com datetime-local + motivo.
+  - Salvar via PATCH /api/tickets/:id.
+  - Mostrar badge “Prazo ajustado manualmente” quando resolutionDueAtManual=true.
+
+========================================
+(5) Responsáveis: só Admins + incluir o Requerente do chamado
+========================================
+- REGRA:
+  - Lista de selecionáveis = usuários role admin + o requerente (createdBy) do ticket.
+- FRONT:
+  - No seletor de responsáveis (admin), carregar diretório de usuários e filtrar:
+    - role === admin
+    - + incluir createdBy (mesmo que não seja admin)
+  - Se createdBy não estiver na lista, adicionar como opção fixa “Requerente: <nome>”.
+- BACK:
+  - No endpoint de set assignees (admin only), validar que cada assigneeId é:
+      (role admin) OR (assigneeId == ticket.createdBy)
+    Caso contrário, rejeitar com 400.
+  - Garantir que o requerente sempre permaneça como assignee opcionalmente (se você quiser forçar, inclua automaticamente; senão apenas permitir selecionar).
+  - Importante: assignees continuam sendo N por ticket (sem duplicar chamados).
+
+========================================
+(6) Aba Histórico: somente finalizados
+========================================
+- FRONT (TicketsIndex):
+  - Tab “Ativos”: ABERTO + EM_ANDAMENTO (+ opcional AGUARDANDO_USUARIO se você considerar ativo)
+  - Tab “Histórico”: SOMENTE RESOLVIDO e CANCELADO
+  - Não mostrar abertos no histórico.
+- BACK:
+  - Se o backend tem includeClosed, ajuste o filtro quando includeClosed=true para retornar apenas finalizados OU aplique no front (preferível backend para consistência).
+  - Para user/coordinator, manter regra de visibilidade por setor.
+
+========================================
+(7) Config de categorias: permitir criação da branch também
+========================================
+- Hoje a tela deve estar limitada a criar só subcategoria (folha).
+- Ajuste UI Admin Categories:
+  - Permitir criar categoria ROOT (branch) com parentId=null.
+  - Permitir criar categoria FILHA selecionando uma branch pai.
+  - Branchs devem aparecer como grupo e as filhas listadas abaixo.
+- BACK:
+  - Permitir POST de categoria com parentId null (admin only).
+  - Validar:
+    - Se parentId null => é branch (root)
+    - Se parentId não null => parent deve existir e ser branch/root
+
+========================================
+(8) Template/máscara por categoria
+========================================
+- DB:
+  - Adicionar em ticket_categories:
+    - descriptionTemplate (text nullable)
+- BACK:
+  - Incluir descriptionTemplate nas respostas de categorias.
+  - No admin categories, permitir salvar/editar o template por categoria (PATCH).
+- FRONT:
+  - No TicketNew:
+    - Ao selecionar uma categoria, se description estiver vazia e houver template, preencher automaticamente a descrição com o template.
+    - Se a descrição já tiver texto, mostrar botão “Inserir template” (concatena ou substitui, escolha substitui com confirmação).
+  - No TicketDetail:
+    - Mostrar categoria e (para admin) opção de editar template via link para Admin Categories (não precisa editar dentro do ticket).
+
+========================================
+CHECKLIST (smoke)
+========================================
+1) Usuário (role user):
+  - vê ativos + histórico, NÃO vê composer de comentário, NÃO consegue postar via API (403).
+2) Coordenador:
+  - NÃO vê aba Admin; consegue abrir chamado; Setor Solicitante auto-seleciona se só 1 setor.
+3) Admin:
+  - vê Admin; consegue criar branch e subcategoria; consegue editar template da categoria.
+  - consegue alterar prazo de conclusão no ticket.
+  - consegue selecionar responsáveis apenas admins + requerente.
+4) Histórico: só RESOLVIDO/CANCELADO.
+5) Nenhuma rota /api/admin aceita coordinator/user (403).
+Faça as alterações nos arquivos existentes (não recrie do zero). Garanta npm run check.

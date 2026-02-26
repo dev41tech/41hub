@@ -1,0 +1,58 @@
+Quero que você aplique alterações pontuais no projeto atual (sem refatorar tudo e sem mudar stack). Faça SOMENTE o que está listado abaixo, editando os arquivos existentes e criando os novos quando indicado. Mantenha o padrão de código do repositório.
+
+OBJETIVOS
+1) Corrigir o botão/menu “Perfil” (não funciona hoje) criando rota e página.
+2) Trocar o ícone/placeholder “41” por uma imagem da logo da 41 Tech no Login e no topo do Sidebar.
+3) Adicionar uma página de “Login local” em /login/local (apenas frontend por enquanto).
+4) Adicionar endpoint no backend para salvar preferência de tema do usuário: PATCH /api/users/me { themePref: "light" | "dark" }.
+5) Não quebrar nada existente. Não implementar login local no backend ainda (apenas a tela e rota no front).
+
+DETALHES DO QUE FAZER
+
+A) PERFIL (Front)
+- Criar nova página: client/src/pages/profile.tsx
+  - Deve exibir dados do usuário logado (name, email).
+  - Deve exibir setores/papéis se existirem em user.roles (renderizar como badges).
+  - Deve ter botão “Alternar tema” (light/dark):
+    - Alterna no UI (theme provider existente)
+    - Chama PATCH /api/users/me para persistir themePref.
+- Adicionar rota /profile no router (client/src/App.tsx ou equivalente).
+- No menu/Dropdown do Sidebar, o item “Perfil” deve navegar para /profile.
+
+B) LOGO 41 TECH
+- Vou subir um arquivo client/public/41tech-logo.png.
+- Atualize:
+  1) client/src/pages/login.tsx (ou equivalente)
+     - Substitua o bloco do “41” por <img src="/41tech-logo.png" alt="41 Tech" className="h-12 w-auto" />
+  2) client/src/components/app-sidebar.tsx (ou equivalente)
+     - Substitua o “41” quadrado do topo por <img src="/41tech-logo.png" alt="41 Tech" className="h-8 w-auto" />
+
+C) LOGIN LOCAL (apenas Front)
+- Criar nova página: client/src/pages/local-login.tsx
+  - Campos: email, password
+  - POST /api/auth/local/login (placeholder; backend ainda não vai existir, então trate erro e mostre toast “Login inválido”)
+  - Usar credentials: "include"
+  - Após sucesso, chamar refreshUser() do auth-context e redirecionar para /
+- Adicionar rota /login/local no router.
+- Na página de login principal, abaixo do botão “Entrar com Microsoft”, adicionar um botão:
+  - “Entrar com usuário local”
+  - Navega para /login/local
+
+D) BACKEND (persistir tema)
+- Criar endpoint PATCH /api/users/me
+  - Requer autenticação (usar o middleware requireAuth já existente)
+  - Valida req.body.themePref em ("light","dark")
+  - Atualiza o usuário no storage (crie storage.updateUser se não existir)
+  - Retorna o usuário atualizado
+
+REGRAS IMPORTANTES
+- Não mude o fluxo de login Microsoft atual.
+- Não implemente OIDC real agora.
+- Não mexa em banco/migrations agora.
+- Não quebre Admin, Resources, Audit.
+- Se algum arquivo tiver nome diferente, localize o equivalente e aplique.
+- Ao final, me mostre um resumo das mudanças com:
+  - lista de arquivos criados/editados
+  - trechos principais adicionados
+
+AGORA EXECUTE ESSAS ALTERAÇÕES NO CÓDIGO.

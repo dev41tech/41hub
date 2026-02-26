@@ -1,0 +1,112 @@
+Implemente autenticação de usuários LOCAIS no 41 Hub, mantendo o login via Microsoft Entra intacto. Não refatore tudo. Faça alterações pontuais e consistentes.
+
+OBJETIVO
+- Ter dois tipos de usuários:
+  1) ENTRA (SSO) -> login Microsoft, sem senha local
+  2) LOCAL -> login via email+senha, criado/gerenciado por Admin (e Coordenador apenas do setor, se já existir essa permissão)
+- Senha padrão configurável (ex: "41Tech@2026"), definida nas configurações do Admin.
+- Ao primeiro login local (ou após reset), obrigar o usuário a trocar a senha (popup/modal bloqueante).
+- Admin deve conseguir: criar usuário local, resetar senha de usuário local, ativar/desativar, e editar setores/papéis.
+- Segurança: hash de senha (bcrypt/argon2), validações básicas, logs de auditoria.
+
+REGRAS IMPORTANTES
+- Não alterar fluxo do login Microsoft (Entra) existente.
+- Usuário ENTRA não possui senha local.
+- Usuário LOCAL não precisa de email corporativo (pode ser gmail etc).
+- Somente Admin (e Coordenador do setor, se permitido pelo backend) pode criar/alterar/excluir usuários LOCAIS.
+- Todo login/logout e reset de senha deve gerar AuditLog.
+
+BANCO / SCHEMA (seguir o ORM/migration do projeto)
+1) Tabela users deve ter campos adicionais:
+- authProvider: "entra" | "local" (default "entra" se vier do SSO)
+- passwordHash: string nullable
+- mustChangePassword: boolean default false
+- passwordUpdatedAt: datetime nullable
+- isActive: boolean default true (se já existir, reaproveitar)
+
+2) Criar uma tabela settings (ou admin_settings) simples:
+- key (string PK)
+- value (string)
+Armazenar:
+- DEFAULT_LOCAL_PASSWORD (string)
+
+ENDPOINTS (Backend)
+A) Auth local
+- POST /api/auth/local/login { email, password }
+  - validar usuário existe, isActive=true, authProvider="local"
+  - comparar hash
+  - criar sessão/cookie do mesmo jeito que o login atual usa (seguir padrão do repo)
+  - retornar user (incluindo mustChangePassword)
+- POST /api/auth/local/change-password { currentPassword?, newPassword }
+  - requer auth
+  - somente para authProvider="local"
+  - se mustChangePassword=true, permitir trocar mesmo sem currentPassword (ou exigir currentPassword se já não for obrigatório; você decide, mas documente)
+  - validar newPassword (mín 10 chars; exigir 1 maiúscula, 1 minúscula, 1 número, 1 especial)
+  - atualizar passwordHash, mustChangePassword=false, passwordUpdatedAt=now
+  - audit log
+
+B) Admin settings (senha padrão)
+- GET /api/admin/settings
+- PATCH /api/admin/settings { DEFAULT_LOCAL_PASSWORD: "..." }
+  - requireAdmin
+  - armazenar na tabela settings
+  - audit log
+  - se não existir, criar valor default "41Tech@2026"
+
+C) Admin users (local)
+- No CRUD de usuários:
+  - permitir escolher authProvider (entra/local) ao criar usuário
+  - Se authProvider="local":
+    - ao criar: setar passwordHash = hash(DEFAULT_LOCAL_PASSWORD)
+    - mustChangePassword=true
+  - Botão “Resetar senha” (apenas para usuários local):
+    - POST /api/admin/users/:id/reset-password
+    - re-hash DEFAULT_LOCAL_PASSWORD
+    - mustChangePassword=true
+    - audit log
+  - Permitir “Alterar senha” opcional no Admin (sem ver senha atual):
+    - POST /api/admin/users/:id/set-password { newPassword } (opcional; se implementar, validar força)
+
+D) Segurança e logs
+- Bloquear login se isActive=false
+- rate-limit básico no endpoint de login local (ex: 10 req/min por IP)
+- Audit log para:
+  - login local sucesso/falha
+  - change-password
+  - reset-password
+  - create/update/delete user local
+
+FRONTEND
+1) Tela /login/local já existe — agora deve funcionar:
+- Após POST /api/auth/local/login sucesso -> refreshUser() e redirect /
+- Se falhar -> toast
+
+2) Modal obrigatório de troca de senha
+- Sempre que o app carregar usuário logado:
+  - se user.authProvider=="local" e user.mustChangePassword==true:
+    - abrir modal bloqueante “Defina sua nova senha”
+    - campos: Nova senha + Confirmar
+    - botão “Salvar”
+    - chama POST /api/auth/local/change-password
+    - em sucesso: refreshUser() e fecha
+  - não permitir navegar enquanto modal aberto
+
+3) Admin UI
+- Na criação/edição de usuário:
+  - campo authProvider (Entra/Local)
+  - se Local: exibir aviso “Senha inicial definida pela configuração do Admin e exigirá troca no primeiro acesso”
+- Na lista de usuários:
+  - mostrar badge “LOCAL” ou “SSO”
+  - mostrar “Resetar senha” apenas para LOCAL
+- Criar página/aba “Configurações” no Admin:
+  - editar DEFAULT_LOCAL_PASSWORD
+  - alerta: “Alterar senha padrão afeta próximos resets e novos usuários locais”
+
+FINALIZAÇÃO
+- Mostre lista de arquivos alterados
+- Mostre como testar:
+  1) Criar usuário local no admin
+  2) Logar em /login/local com senha padrão
+  3) Ver modal obrigatório
+  4) Trocar senha e confirmar que mustChangePassword vira false
+  5) Resetar senha via admin e repetir fluxo

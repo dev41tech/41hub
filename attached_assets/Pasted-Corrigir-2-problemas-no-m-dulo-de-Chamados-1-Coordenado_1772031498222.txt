@@ -1,0 +1,86 @@
+Corrigir 2 problemas no módulo de Chamados:
+
+========================
+1) Coordenador não consegue abrir chamado (aparece “Usuário sem setor vinculado”)
+========================
+Causa provável: a lista de setores do “Setor Solicitante” está sendo montada somente a partir de setores onde o user tem role "Usuario", ou está usando user.sectorId (campo antigo) em vez de user.roles (userSectorRoles).
+
+Ajustes obrigatórios:
+
+(1.1) FRONT (TicketsNew)
+- Obter setores a partir do usuário logado vindo de /api/auth/me (ele possui `roles: [{sectorId, sectorName, roleName}]`).
+- Para COORDENADOR:
+  - setoresPermitidos = unique(user.roles where roleName == "Coordenador").map(sectorId/sectorName)
+  - Se por algum motivo vier vazio, fallback = unique(user.roles).map(sectorId/sectorName) (para não travar UI indevidamente).
+- Para ADMIN:
+  - pode listar todos os setores (via /api/admin/sectors) OU usar um endpoint /api/sectors simples.
+- Para USUÁRIO:
+  - ele nem acessa a tela de “novo chamado”; se acessar por URL, bloquear e redirecionar.
+
+Regras da UI:
+- Se setoresPermitidos.length == 1:
+  - preencher requesterSectorId automaticamente
+  - esconder o select
+- Se > 1:
+  - mostrar select com opções
+- Se == 0:
+  - mostrar “Usuário sem setor vinculado...” (mas isso só deve acontecer se realmente não houver role setorial no /api/auth/me)
+
+(1.2) BACK (POST /api/tickets)
+- Quando actor for Coordenador:
+  - validar que requesterSectorId está dentro dos setores onde ele tem roleName == "Coordenador"
+  - se não estiver, retornar 403.
+- Não usar user.sectorId; sempre usar getUserWithRoles(userId) e comparar pelas roles.
+
+(1.3) DEBUG RÁPIDO
+- Temporariamente logar no console (somente dev):
+  - user.roles do req.user no create ticket
+  - e no front console.log do auth user
+Remover logs depois de validar.
+
+========================
+2) Categorias: não cria branch e não reativa categoria inativa
+========================
+Causa provável:
+- Tela Admin Categories está “hardcoded” nas 3 branches padrão
+- GET admin categories retorna apenas ativas, então as inativas somem (sem botão pra reativar)
+- PATCH não permite setar isActive=true
+
+Ajustes obrigatórios:
+
+(2.1) BACK
+- GET /api/admin/tickets/categories deve retornar TODAS (ativas e inativas), em formato lista plana + opcional árvore.
+- PATCH /api/admin/tickets/categories/:id deve aceitar isActive boolean (true/false) e atualizar.
+- DELETE deve virar soft delete (isActive=false) se ainda existir; mas a reativação precisa ser via PATCH isActive=true.
+- POST deve permitir criar:
+  - BRANCH: parentId = null (root)
+  - SUBCATEGORIA: parentId = <id de uma branch existente>
+- Validação:
+  - Se parentId != null, parent precisa existir e ser root (parent.parentId == null).
+
+(2.2) FRONT (AdminTicketCategories)
+- Remover qualquer lista fixa/const das 3 branches.
+- Branches devem ser carregadas do backend: categorias onde parentId == null.
+- Adicionar UI:
+  - Botão “Nova branch”
+  - Botão “Nova subcategoria” (seleciona uma branch pai)
+  - Coluna/Badge “Ativa/Inativa”
+  - Ação “Inativar” e “Reativar” (toggle) chamando PATCH isActive=false/true.
+  - Toggle “Mostrar inativas” (por padrão OFF). Quando OFF, filtrar inativas; quando ON, mostrar tudo.
+- Importante: ao inativar uma branch, decidir regra:
+  - (simples) permitir inativar branch mesmo com filhos, mas ocultar tudo no catálogo público
+  - (melhor) ao inativar branch, inativar filhos em cascata (opcional)
+Escolha a opção simples agora.
+
+(2.3) ENDPOINT público de categorias
+- GET /api/tickets/categories (usado por TicketNew) deve retornar APENAS categorias ativas.
+- Se uma branch estiver inativa, suas subcategorias não devem aparecer.
+
+CHECKLIST:
+- Coordenador com 1 setor abre chamado (setor auto preenchido).
+- Coordenador com 2 setores consegue escolher.
+- Admin cria branch nova e ela aparece na criação de subcategoria.
+- Admin inativa e reativa uma categoria.
+- TicketNew lista somente categorias ativas.
+
+Garanta npm run check.

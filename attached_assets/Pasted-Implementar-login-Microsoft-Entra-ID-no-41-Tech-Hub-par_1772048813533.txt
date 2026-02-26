@@ -1,0 +1,103 @@
+Implementar login Microsoft Entra ID no 41-Tech-Hub para remover o 501 do /api/auth/login.
+
+Contexto atual:
+- client/src/lib/auth-context.tsx faz window.location.href = "/api/auth/login"
+- server/routes.ts: /api/auth/login em produção retorna 501.
+Objetivo:
+- Em produção, /api/auth/login deve redirecionar para o fluxo Entra.
+- Criar rotas /api/auth/entra/login e /api/auth/entra/callback usando @azure/msal-node.
+- Após callback, mapear usuário pelo e-mail (ou oid) para users, setar req.session.userId e redirect para "/".
+- Não permitir auto-criar usuários por padrão: se e-mail não existir no banco, retornar 403 com mensagem "Usuário não cadastrado. Contate o Admin."
+
+1) Dependências
+- Adicionar @azure/msal-node no package.json:
+  npm i @azure/msal-node
+
+2) Cookies e proxy (obrigatório para OAuth funcionar)
+2.1 server/index.ts:
+- Antes dos middlewares, adicionar:
+  app.set("trust proxy", 1)
+
+2.2 server/routes.ts (session cookie):
+- Alterar sameSite de "strict" para "lax" (senão o callback perde a sessão):
+  sameSite: "lax"
+- Manter secure=true em produção.
+
+3) Criar util MSAL (server/lib/entra.ts)
+Criar arquivo server/lib/entra.ts exportando:
+- function isEntraConfigured(): boolean
+  retorna true se AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_REDIRECT_URI existirem.
+- function getMsalClient(): ConfidentialClientApplication
+  usando:
+    auth: {
+      clientId,
+      clientSecret,
+      authority: `https://login.microsoftonline.com/${tenantId}`
+    }
+
+4) Rotas Entra em server/routes.ts
+4.1 Tipar session:
+- Em declare module "express-session", adicionar:
+  interface SessionData {
+    userId?: string;
+    entraState?: string;
+  }
+
+4.2 Ajustar /api/auth/login
+- Em produção:
+  - se isEntraConfigured() => res.redirect("/api/auth/entra/login")
+  - se não => manter 501 com mensagem de env faltando
+- Em desenvolvimento:
+  - manter auto-login atual
+
+4.3 Criar GET /api/auth/entra/login
+- Gerar state random (crypto.randomBytes(16).toString("hex"))
+- Salvar em req.session.entraState
+- Gerar authCodeUrl:
+  scopes: ["openid", "profile", "email"]
+  redirectUri: process.env.AZURE_REDIRECT_URI
+  state
+  prompt: "select_account"
+- res.redirect(authCodeUrl)
+
+4.4 Criar GET /api/auth/entra/callback
+- Ler query: code, state
+- Validar state === req.session.entraState; se não bater => 400
+- trocar code por token:
+  acquireTokenByCode({ code, scopes:["openid","profile","email"], redirectUri })
+- Pegar claims:
+  - oid = idTokenClaims?.oid
+  - email = idTokenClaims?.preferred_username || idTokenClaims?.email
+  - name = idTokenClaims?.name
+- Mapear usuário:
+  - tentar storage.getUserByEntraOid(oid) se oid existir
+  - senão tentar storage.getUserByEmail(email)
+  - Se encontrar:
+      - se entraOid vazio, atualizar entraOid = oid
+      - req.session.userId = user.id
+      - audit log "entra_login_success"
+      - redirect "/"
+  - Se NÃO encontrar:
+      - audit log "entra_login_denied" com email/oid
+      - retornar 403 JSON { error:"Usuário não cadastrado. Contate o administrador." }
+        (não redirecionar pra "/" para não ficar em loop)
+
+5) Logout Entra (opcional mas recomendado)
+- Criar GET /api/auth/entra/logout:
+  - destruir sessão local
+  - redirecionar para:
+    https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/logout?post_logout_redirect_uri=<encodeURIComponent(AZURE_POST_LOGOUT_REDIRECT_URI ou https://hub.../)>
+
+6) Checklist de infra (Nginx/Proxy)
+- Garanta que seu reverse proxy envia:
+  X-Forwarded-Proto: https
+- (isso + app.set("trust proxy",1)) é essencial para cookie secure ser aceito.
+
+7) Smoke test
+- Acessar https://hub.41tech.cloud/api/auth/login
+  => deve redirecionar para login.microsoftonline.com (não 501)
+- Logar com um e-mail que já existe no banco users:
+  => deve cair no hub autenticado (/)
+- Logar com e-mail que não existe:
+  => deve retornar 403 "Usuário não cadastrado"
+Garanta npm run check.

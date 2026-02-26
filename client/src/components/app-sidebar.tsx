@@ -1,0 +1,172 @@
+import { useLocation, Link } from "wouter";
+import {
+  Home,
+  LayoutGrid,
+  BarChart3,
+  Star,
+  Settings,
+  LogOut,
+  User,
+  Ticket,
+  Keyboard,
+} from "lucide-react";
+import { ThemeLogo } from "@/components/theme-logo";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from "@/components/ui/sidebar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { useAuth } from "@/lib/auth-context";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+const mainMenuItems = [
+  { title: "Home", url: "/", icon: Home },
+  { title: "Apps", url: "/apps", icon: LayoutGrid },
+  { title: "Dashboards", url: "/dashboards", icon: BarChart3 },
+  { title: "Chamados", url: "/tickets", icon: Ticket },
+  { title: "Digitação", url: "/typing", icon: Keyboard },
+  { title: "Favoritos", url: "/favorites", icon: Star },
+];
+
+const adminMenuItems = [
+  { title: "Configurações", url: "/admin", icon: Settings },
+];
+
+export function AppSidebar() {
+  const [location] = useLocation();
+  const { user, logout, isAuthenticated } = useAuth();
+
+  const isAdmin = user?.isAdmin;
+
+  const getInitials = (name: string) => {
+    return name
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2);
+  };
+
+  return (
+    <Sidebar>
+      <SidebarHeader className="border-b border-sidebar-border px-4 py-4">
+        <div className="flex items-center justify-center">
+          <ThemeLogo className="h-10 w-auto" />
+        </div>
+      </SidebarHeader>
+
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel>Menu Principal</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {mainMenuItems.map((item) => (
+                <SidebarMenuItem key={item.title}>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={item.url === "/" ? location === "/" : location.startsWith(item.url)}
+                    data-testid={`nav-${item.title.toLowerCase()}`}
+                  >
+                    <Link href={item.url}>
+                      <item.icon className="h-4 w-4" />
+                      <span>{item.title}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        {isAdmin && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Configurações</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {adminMenuItems.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location.startsWith(item.url)}
+                      data-testid={`nav-${item.title.toLowerCase()}`}
+                    >
+                      <Link href={item.url}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
+      </SidebarContent>
+
+      <SidebarFooter className="border-t border-sidebar-border p-4">
+        {isAuthenticated && user ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                className="w-full justify-start gap-3 h-auto py-2 px-2"
+                data-testid="button-user-menu"
+              >
+                <Avatar className="h-8 w-8">
+                  {user.photoUrl && <AvatarImage src={user.photoUrl} alt={user.name} />}
+                  <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                    {getInitials(user.name)}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex flex-col items-start text-left overflow-hidden">
+                  <span className="text-sm font-medium truncate max-w-[140px]">
+                    {user.name}
+                  </span>
+                  <span className="text-xs text-muted-foreground truncate max-w-[140px]">
+                    {user.email}
+                  </span>
+                </div>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56">
+              <Link href="/profile">
+                <DropdownMenuItem data-testid="menu-profile" className="cursor-pointer">
+                  <User className="mr-2 h-4 w-4" />
+                  <span>Perfil</span>
+                </DropdownMenuItem>
+              </Link>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={logout}
+                className="text-destructive focus:text-destructive"
+                data-testid="menu-logout"
+              >
+                <LogOut className="mr-2 h-4 w-4" />
+                <span>Sair</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <div className="text-sm text-muted-foreground text-center">
+            Não autenticado
+          </div>
+        )}
+      </SidebarFooter>
+    </Sidebar>
+  );
+}

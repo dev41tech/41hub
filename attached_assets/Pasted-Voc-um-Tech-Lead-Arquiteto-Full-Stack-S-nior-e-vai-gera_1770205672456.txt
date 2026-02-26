@@ -1,0 +1,160 @@
+Você é um Tech Lead/Arquiteto Full-Stack Sênior e vai gerar um projeto completo para um Hub interno da empresa "41 Tech" (nome do sistema: "41 Hub"), com design corporativo, tema claro/escuro e autenticação via Microsoft Entra ID (Azure AD). O objetivo é centralizar acesso a sistemas internos (via iframe/link) e dashboards do Power BI, exibindo apenas o que cada usuário pode acessar, por setor e permissões finas.
+
+REQUISITOS PRINCIPAIS
+1) Autenticação e Segurança
+- Login via Microsoft Entra ID (OAuth2/OIDC).
+- MFA aplicado no Entra (assumir que a política já existe).
+- Backend deve validar tokens (JWT) e extrair: sub/oid, email, name, groups (se disponível).
+- O Hub é acessado via internet com HTTPS.
+- Implementar RBAC + exceções por usuário:
+  - Admin: acesso total (todos setores e recursos) e painel admin completo.
+  - Coordenador: acesso total ao setor dele; gerencia permissões dos usuários do setor dele.
+  - Usuário: acessos definidos; pode ter allow/deny por recurso.
+- Auditoria obrigatória: logar ações importantes e acessos.
+
+2) Conteúdo do Hub
+- Recursos do tipo:
+  A) APP (sistemas internos) -> exibidos via iframe ou link interno do Hub.
+  B) DASHBOARD (Power BI) -> exibidos via embed.
+- Usuário só vê recursos autorizados conforme:
+  - setor(es) que ele participa + papel + overrides allow/deny.
+- Features do Hub:
+  - Busca global (nome/tags)
+  - Favoritos (pin)
+  - Últimos acessos
+  - Notificações (por exemplo: sistema fora do ar)
+  - Status de saúde dos recursos (health check básico)
+
+3) Restrições para “link funcionar só no Hub”
+- Não usar “segredos no front”.
+- Implementar um Gateway/Proxy (reverse proxy) para apps internos:
+  - Apps internos NÃO devem ficar expostos diretamente.
+  - O acesso aos apps passa por um endpoint do Hub/gateway que exige token válido e autorização.
+  - O gateway deve verificar a autorização do usuário para o resourceId antes de permitir.
+- Para iframes:
+  - Servir via subdomínio controlado e headers apropriados:
+    - CSP configurada no Hub
+    - X-Frame-Options e frame-ancestors coerentes (permitir embed apenas do Hub)
+  - O gateway deve injetar/propagar identidade se necessário (ou apenas servir como proteção).
+- Observação: apps internos podem não suportar SSO; nesse caso o gateway apenas protege por autorização do Hub.
+
+4) Power BI embed (considerar evolução)
+- Hoje o cenário pode estar “parcial”, mas deve ser arquitetado para suportar:
+  - Embed com autenticação organizacional (SSO) e controle por workspace/reports.
+- Criar uma camada ResourceProvider para Dashboards:
+  - resource.metadata: { powerbi: { workspaceId, reportId, pageName?, filters? } }
+- O front deve embutir Power BI via SDK (ou iframe embed) com token obtido via backend.
+- O backend terá endpoints para gerar embed config/token (placeholder se necessário), mas com estrutura pronta.
+
+STACK (preferência)
+- Frontend: React + TypeScript + Vite, UI corporativa, responsiva, cards.
+- Backend: Node.js + TypeScript (Express ou Fastify).
+- Banco: Postgres.
+- Auth: integração Entra ID (OIDC) no backend; front com login redirect.
+- Infra: Docker Compose (frontend, backend, postgres, gateway).
+- Gateway: Nginx (simples) ou Traefik (ok). Preferir Nginx para MVP.
+
+MODELO DE DADOS (Postgres)
+Tabelas mínimas:
+- users (id, entra_oid, email, name, is_active, theme_pref, created_at)
+- sectors (id, name, created_at)
+- roles (id, name) [Admin, Coordenador, Usuario]
+- user_sector_roles (user_id, sector_id, role_id)
+- resources (id, name, type APP|DASHBOARD, sector_id default, icon, tags[], embed_mode LINK|IFRAME|POWERBI, url, metadata jsonb, is_active)
+- resource_overrides (id, user_id, resource_id, effect ALLOW|DENY, created_by, created_at)
+- favorites (user_id, resource_id, sort_order)
+- recent_access (user_id, resource_id, last_access_at)
+- audit_logs (id, actor_user_id, action, target_type, target_id, metadata jsonb, created_at, ip)
+- health_checks (resource_id, status UP|DEGRADED|DOWN, last_check_at, response_time_ms, details)
+
+REGRAS DE AUTORIZAÇÃO
+- Admin: tudo.
+- Coordenador: tudo do(s) setor(es) onde ele é coordenador; pode gerenciar:
+  - usuários do setor (atribuir role Usuario/Coordenador dentro do setor, exceto elevar para Admin)
+  - overrides allow/deny de usuários do setor
+  - recursos do setor (CRUD) e tags/ícones
+- Usuário:
+  - vê recursos ativos do(s) setor(es) onde participa
+  - aplicar overrides por usuário:
+    - DENY sempre prevalece sobre ALLOW e sobre padrão do setor
+    - se não tiver override, segue regra do setor
+- Toda chamada de “abrir recurso” deve registrar audit log e recent_access.
+
+UX/UI
+- Tema claro/escuro por usuário (persistir no users.theme_pref).
+- Layout corporativo:
+  - Topbar com logo 41 Tech e switch de tema
+  - Sidebar com: Home, Apps, Dashboards, Favoritos, Admin (se permitido)
+  - Grid de cards com ícone simples e tags
+  - Busca no topo da listagem
+  - Seção “Últimos acessos”
+  - Badge de status (UP/DOWN)
+- Paleta: usar tons azuis da marca 41 (definir variáveis CSS). Não inventar roxo/rosa.
+
+PAINEL ADMIN (CRUD)
+- Gestão de setores
+- Gestão de usuários:
+  - associar a setores e roles
+  - ativar/desativar
+  - definir tema preferido
+- Gestão de recursos:
+  - criar/editar APP e DASHBOARD
+  - associar setor default
+  - embed_mode e url/metadata
+  - tags e ícone (string de nome do ícone)
+- Overrides por usuário (allow/deny)
+- Auditoria (lista com filtros)
+
+HEALTH CHECKS
+- Um worker (backend cron) verifica recursos APP (por URL interna do gateway) e atualiza health_checks.
+- Para Power BI, health check pode ser básico (ex: marcar como UP se config existe; opcional melhorar depois).
+
+OBSERVABILIDADE
+- Logs estruturados JSON no backend.
+- Endpoints:
+  - GET /health (backend)
+  - GET /metrics (opcional)
+- Tratar erros com códigos e mensagens claras.
+
+ENTREGÁVEIS DO CÓDIGO
+- Repo com estrutura:
+  docs/
+    DECISIONS.md (trade-offs e decisões)
+    RUNBOOK.md (como subir/local/prod)
+  infra/
+    docker-compose.yml
+    nginx/
+      nginx.conf
+  scripts/
+    seed.ts (popular dados iniciais)
+  src/
+    backend/...
+    frontend/...
+  tests/
+    (mínimo: teste de autorização)
+  configs/
+    .env.example
+
+- Docker Compose deve subir tudo localmente com:
+  - postgres
+  - backend (porta 4000)
+  - frontend (porta 3000)
+  - gateway (porta 8080) com proxy para apps internos (mock)
+- Incluir seed inicial com setores: BPO, DP, Contábil, Tech
+- Incluir usuário Admin inicial (por env var ENTRA_ADMIN_EMAIL)
+
+DETALHE IMPORTANTE (não negociar)
+- NÃO expor URLs internas diretamente no front se forem sensíveis.
+- O front deve apontar para uma rota do backend/gateway do tipo:
+  - GET /r/:resourceId (abre recurso com checagem de permissão)
+  - Para iframe: retornar uma URL proxied (ex: /proxy/:resourceId/*)
+- Implementar CSP/headers para reduzir risco de clickjacking e XSS.
+
+AGORA FAÇA
+1) Gere o projeto completo com todos arquivos e código.
+2) Inclua instruções de deploy.
+3) Inclua decisões em docs/DECISIONS.md.
+4) Garanta que as regras RBAC + overrides estão implementadas e testadas.
+5) Crie componentes React para as páginas principais.
+6) No backend, implemente middlewares de auth e authorize(resourceId).
+7) Deixe o módulo de Power BI pronto para evoluir (mesmo que token real seja placeholder), mantendo contratos e endpoints.

@@ -201,15 +201,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.use(
     session({
-      store: new PgSession({ pool, createTableIfMissing: true }),
-      secret: sessionSecret || "41hub-dev-only-secret",
+      name: "hub.sid",
+      secret: process.env.SESSION_SECRET,
       resave: false,
       saveUninitialized: false,
+      store: new PgSession({ pool, createTableIfMissing: true }),
       cookie: {
-        secure: process.env.NODE_ENV === "production",
         httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
-        maxAge: 24 * 60 * 60 * 1000,
+        path: "/",
+        maxAge: 1000 * 60 * 60 * 24 * 7,
       },
     })
   );
@@ -285,10 +287,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         prompt: "select_account",
       });
 
-      res.redirect(authCodeUrl);
+      // ✅ Garante que o state foi persistido no store (Postgres) antes do redirect
+      return req.session.save((err) => {
+        if (err) {
+          console.error("session save failed:", err);
+          return res.status(500).json({ error: "session_save_failed" });
+        }
+        return res.redirect(authCodeUrl);
+      });
     } catch (error) {
       console.error("Entra login error:", error);
-      res.status(500).json({ error: "Failed to initiate Entra ID login" });
+      return res.status(500).json({ error: "Failed to initiate Entra ID login" });
     }
   });
 
@@ -300,8 +309,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ error: "Missing code or state parameter" });
     }
 
-    if (state !== req.session.entraState) {
-      return res.status(400).json({ error: "Invalid state parameter" });
+    if (!state || state !== req.session.entraState) {
+      // em vez de 400 seco, manda reiniciar login
+      return res.redirect("/login?error=entra_state");
     }
 
     delete req.session.entraState;

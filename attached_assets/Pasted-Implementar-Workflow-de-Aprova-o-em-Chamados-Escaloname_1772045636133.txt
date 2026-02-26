@@ -1,0 +1,182 @@
+Implementar Workflow de Aprovação em Chamados + Escalonamento de SLA + Webhooks de eventos.
+
+OBJETIVOS
+1) Algumas categorias (principalmente DEV) devem poder exigir APROVAÇÃO antes do TI iniciar.
+2) SLA deve ficar “pausado” enquanto aguarda aprovação.
+3) Se SLA estiver em risco/estourado, gerar notificações automáticas (sem spam).
+4) Emitir webhooks (configuráveis) para n8n quando eventos importantes acontecerem.
+
+REGRAS
+- Admin configura quais categorias exigem aprovação e quem aprova.
+- Coordenador cria ticket; se categoria exigir aprovação, ticket entra em “AGUARDANDO_APROVACAO”.
+- Admin só trabalha (status EM_ANDAMENTO) depois de aprovado (ou admin pode “forçar aprovar”).
+- Nada de spam em notificação: deduplicar alertas por ticket/ciclo.
+
+========================================================
+1) DB (shared/schema.ts)
+========================================================
+1.1 Enum ticket_status
+- Adicionar: "AGUARDANDO_APROVACAO"
+
+1.2 ticket_categories (leaf)
+Adicionar:
+- requiresApproval bool default false
+- approvalMode varchar(32) default "REQUESTER_COORDINATOR"
+  valores:
+   - "REQUESTER_COORDINATOR"  -> aprovador = coordenador do setor origem (requesterSector)
+   - "TI_ADMIN"               -> aprovador = qualquer admin TI
+   - "SPECIFIC_USERS"         -> aprovadores = lista configurada
+- approvalUserIds text[] default []  (para SPECIFIC_USERS)
+
+1.3 ticket_approvals
+Criar tabela:
+- id uuid
+- ticketId fk tickets cascade
+- cycleNumber int not null  (amarrar com SLA cycle)
+- requestedBy fk users set null
+- requesterSectorId fk sectors set null
+- status varchar(16) not null  // PENDING | APPROVED | REJECTED
+- approverUserId fk users set null
+- decisionNote text null
+- requestedAt defaultNow
+- decidedAt timestamp null
+Unique(ticketId, cycleNumber)  // 1 approval por ciclo
+
+1.4 ticket_sla_cycles
+- Reusar os campos pause/resume já existentes.
+- Ao entrar em AGUARDANDO_APROVACAO, usar a MESMA mecânica de pause (pausedAt + empurrar dueAt ao retomar).
+
+1.5 ticket_alerts_dedup (para não spammar)
+Criar:
+- id uuid
+- ticketId fk tickets cascade
+- cycleNumber int not null
+- alertType varchar(24) not null   // FIRST_RISK | FIRST_BREACH | RES_RISK | RES_BREACH
+- createdAt defaultNow
+Unique(ticketId, cycleNumber, alertType)
+
+========================================================
+2) Backend: Workflow de Aprovação (server/storage.ts + routes.ts)
+========================================================
+2.1 Criar helpers
+- resolveApprovers(ticket):
+  - baseado em category.approvalMode:
+    - REQUESTER_COORDINATOR: listar users com roleName="Coordenador" no requesterSectorId
+    - TI_ADMIN: listar users com roleName="Admin" no targetSectorId (TI)
+    - SPECIFIC_USERS: usar approvalUserIds
+- isApprover(user, ticket): true se user.id estiver em approvers
+
+2.2 Create Ticket (POST /api/tickets)
+- Se category.requiresApproval == true:
+  - set ticket.status = AGUARDANDO_APROVACAO
+  - criar ticket_approvals (status=PENDING, cycleNumber atual)
+  - PAUSAR SLA imediatamente:
+     - cycle.pausedAt = now (se null)
+- Se não exigir aprovação:
+  - status normal ABERTO
+
+2.3 Rotas de aprovação
+- GET /api/tickets/:id/approval (auth)
+  - retorna approval atual (se houver) + approvers (somente para admin/coordinator/approver)
+- POST /api/tickets/:id/approval/approve (auth)
+  - permitido para:
+     - Admin (sempre) OU Approver (conforme mode)
+  - seta approval.status=APPROVED, approverUserId, note, decidedAt
+  - muda ticket.status de AGUARDANDO_APROVACAO -> ABERTO (ou EM_ANDAMENTO se você preferir)
+  - RETOMAR SLA (despausar e empurrar dueAt) usando sua função de resume
+  - criar ticket_event + audit_log
+  - emitir notificação: "Chamado aprovado"
+- POST /api/tickets/:id/approval/reject (auth)
+  - permitido para Admin/Approver
+  - seta status=REJECTED
+  - muda ticket.status -> CANCELADO (ou mantém REJECTED; no MVP use CANCELADO)
+  - fechar ciclo (closedAt, resolvedAt?) apenas se fizer sentido; preferível: set closedAt e resolvedAt=now (como cancelado)
+  - ticket_event + audit_log + notificação
+
+2.4 Bloqueio de trabalho antes de aprovar
+- PATCH /api/tickets/:id (admin):
+  - se ticket.status == AGUARDANDO_APROVACAO:
+     - não permitir mudar para EM_ANDAMENTO/RESOLVIDO sem antes aprovar
+     - exceção: admin pode aprovar via endpoint e depois mudar
+  - mensagem clara 409: "Chamado aguardando aprovação"
+
+========================================================
+3) Frontend: Aprovação na tela do ticket
+========================================================
+3.1 TicketDetail
+- Mostrar bloco “Aprovação” quando status == AGUARDANDO_APROVACAO:
+  - Texto: "Aguardando aprovação para iniciar"
+  - Se user for Admin ou Approver:
+     - botões “Aprovar” e “Rejeitar”
+     - modal com campo motivo/nota
+  - Caso contrário:
+     - mostrar “Aguardando aprovador: <nomes>” (se permitido)
+- Mostrar badge “SLA pausado” enquanto aguarda aprovação (cycle.pausedAt != null)
+
+3.2 AdminTicketCategories (Configurações de Chamados)
+- No editor da categoria leaf:
+  - toggle “Exigir aprovação”
+  - select “Modo de aprovação” (REQUESTER_COORDINATOR / TI_ADMIN / SPECIFIC_USERS)
+  - se SPECIFIC_USERS: multi-select de usuários (pode ser admins/coordenadores)
+- Salvar via PATCH category
+
+========================================================
+4) Escalonamento de SLA automático (sem spam)
+========================================================
+4.1 Job simples no servidor
+- Em server/index.ts (ou um worker file importado):
+  - setInterval a cada 5 minutos:
+     - buscar tickets ativos do TI + ciclo atual
+     - ignorar se cycle.pausedAt != null
+     - calcular RISK/BREACH para firstResponse/resolution
+     - antes de criar notificação, checar ticket_alerts_dedup (unique) para não repetir
+     - criar notifications para admins (e opcionalmente para assignees)
+Tipos:
+- FIRST_RISK: primeira resposta perto do vencimento
+- FIRST_BREACH: estourou primeira resposta
+- RES_RISK: conclusão perto do vencimento
+- RES_BREACH: estourou conclusão
+
+4.2 Notificação
+- title: "SLA em risco" / "SLA estourado"
+- linkUrl: /tickets/:id
+- message: incluir qual SLA e quanto tempo falta/atraso
+
+========================================================
+5) Webhooks de eventos (integração n8n)
+========================================================
+5.1 Configuração
+- Criar tabela admin_settings (se já existe) ou reutilizar:
+  - WEBHOOK_EVENTS_URL (string)
+  - WEBHOOK_EVENTS_ENABLED (bool)
+- Admin UI em /admin (Configurações) pode ter um card “Integrações” (simples):
+  - URL do webhook
+  - toggle habilitar
+
+5.2 Emissão de webhook
+- Criar server/lib/webhooks.ts com função:
+  - emitEvent(type, payload)
+  - se disabled ou URL vazia: return
+  - POST JSON com timeout 5s
+  - retry simples (1 retry) sem travar request (fire-and-forget)
+  - incluir idempotencyKey: `${type}:${ticketId}:${cycleNumber}:${eventId}`
+Tipos mínimos:
+- ticket_created
+- ticket_approved
+- ticket_rejected
+- ticket_status_changed
+- ticket_commented
+- ticket_resolved
+
+Chamar emitEvent nos pontos correspondentes.
+
+========================================================
+SMOKE
+========================================================
+1) Marcar categoria DEV "Criação de Fluxo de Automação" como requiresApproval=true, mode=REQUESTER_COORDINATOR.
+2) Coordenador cria ticket -> entra AGUARDANDO_APROVACAO, SLA pausado.
+3) Aprovador aprova -> status vai ABERTO e SLA retoma.
+4) Job de SLA cria notificação de risco 1x (dedup).
+5) Webhook recebe payload quando aprova e muda status.
+
+Garanta npm run check.

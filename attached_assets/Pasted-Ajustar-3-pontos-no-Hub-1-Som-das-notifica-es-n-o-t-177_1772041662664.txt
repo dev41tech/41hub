@@ -1,0 +1,95 @@
+Ajustar 3 pontos no Hub:
+
+========================================
+(1) Som das notificações não toca (mesmo permitindo)
+========================================
+Problema comum: autoplay policy, Audio() não carregado, caminho errado do arquivo, ou o código nunca chama play() por falta de "user gesture" detectado.
+
+Implementar solução robusta:
+
+1.1 Criar um "SoundManager" global (client/src/lib/sound.ts)
+- Exportar:
+  - `primeAudio()` => deve ser chamado em uma ação do usuário (ex: clique no app) e preparar o áudio
+  - `playNotify()` => toca o som se primed e se o setting do usuário permitir (se existir)
+- Implementação:
+  - manter singleton `audio` carregado com `/notify.mp3`
+  - `audio.preload = "auto"`
+  - `audio.volume = 0.6`
+  - `primeAudio()`:
+     - se já primed, return
+     - tentar `audio.play()` com volume 0 e imediatamente pausar + reset currentTime=0 (isso “desbloqueia” em muitos browsers)
+     - set primed=true se não der exception
+  - `playNotify()`:
+     - if !primed => return (sem erro)
+     - set volume normal
+     - audio.currentTime=0
+     - await audio.play().catch(()=>{})
+
+1.2 Garantir que primeAudio() é chamado com gesto do usuário
+- No layout autenticado (header ou App root), adicionar listener:
+  - no primeiro click do usuário (document.addEventListener("pointerdown", ..., { once:true }))
+  - chamar `primeAudio()`
+Isso garante gesto real.
+
+1.3 Garantir o arquivo existe e o path está correto
+- Colocar `notify.mp3` em `client/public/notify.mp3` (ou `public/notify.mp3` dependendo do Vite config).
+- Validar via navegador: abrir /notify.mp3 deve tocar/baixar.
+
+1.4 Trigger do som
+- Onde você dispara o toast de notificação nova (polling):
+  - depois de identificar que é realmente nova: chamar `playNotify()`
+
+1.5 Debug rápido (somente dev)
+- Logar no console:
+  - quando primeAudio() foi executado
+  - quando playNotify() foi chamado
+  - se audio.play() deu erro (mostrar nome do erro)
+Remover logs depois.
+
+========================================
+(2) Mostrar dificuldade no registro de pontuação (Ranking e "Meu score")
+========================================
+2.1 Backend
+- Garantir que endpoints:
+  - /api/typing/leaderboard
+  - /api/typing/me
+retornem `difficulty` junto dos scores.
+Se já filtra por difficulty, ainda assim inclua o campo.
+
+2.2 Frontend
+- Ranking (/typing/leaderboard):
+  - Na tabela, adicionar coluna “Dificuldade” ou um badge perto do WPM:
+    - Fácil (1), Média (2), Difícil (3)
+  - No “Meu desempenho”/linha destacada, mostrar também a dificuldade.
+
+- Página /typing resultado final:
+  - Mostrar “Dificuldade: X” no card do resultado.
+
+- Profile:
+  - Se exibe melhor score do mês, mostrar também a dificuldade do score.
+
+========================================
+(3) Centralização/Simetria: Ranking e Meu Perfil
+========================================
+Aplicar o mesmo padrão de container usado em /typing:
+- `max-w-4xl w-full mx-auto px-4`
+
+3.1 Ranking (/typing/leaderboard)
+- Envolver toda a página em um container centralizado.
+- Ajustar alinhamento de header, tabs e tabelas dentro de Cards com padding.
+- Evitar colunas estouradas:
+  - tabela com `w-full` e `overflow-x-auto` quando necessário.
+
+3.2 Perfil (/profile)
+- Envolver com container centralizado.
+- Organizar em grid:
+  - coluna principal (dados)
+  - coluna lateral (badges/typing stats) se existir
+- Garantir que input/labels não fiquem “colados” na esquerda.
+
+CHECKLIST:
+1) Abrir o hub, clicar em qualquer lugar, depois disparar uma notificação -> toca som.
+2) Ranking mostra badge/coluna de dificuldade.
+3) Ranking e Perfil ficam centralizados e simétricos.
+4) /notify.mp3 acessível direto pela URL.
+`npm run check` ok.

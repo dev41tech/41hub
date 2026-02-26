@@ -1,0 +1,231 @@
+Implementar 3 features “nível empresa” no 41-Tech-Hub:
+(1) Painel TI (Ops Dashboard)
+(2) Base de Conhecimento (KB) por categoria de chamado + sugestão na abertura
+(3) Typing Test com ranking mensal por setor + badge no perfil
+
+REGRAS:
+- Não quebrar rotas existentes.
+- Admin-only onde fizer sentido.
+- Tipagem forte em shared/schema.ts + Drizzle.
+- Tudo com React Query + shadcn/ui.
+- Criar docs/runbooks.
+- `npm run check` ok.
+
+========================================================
+(1) PAINEL TI — Ops Dashboard
+========================================================
+1.1 Backend (server/storage.ts + routes)
+Criar endpoint admin:
+- GET /api/admin/ti/dashboard?range=7d|30d
+Retornar um JSON com:
+A) queue:
+- tickets ativos (ABERTO/EM_ANDAMENTO/AGUARDANDO_USUARIO) do targetSector=TI
+- incluir: id, title, status, priority, requesterSectorName, categoryName, createdAt,
+          currentCycle: firstResponseDueAt, resolutionDueAt, firstResponseAt, resolvedAt,
+          assignees (array com id, name)
+- incluir computed fields:
+  - slaFirstResponseState: "OK"|"RISK"|"BREACHED"
+  - slaResolutionState: "OK"|"RISK"|"BREACHED"
+  - minutesToFirstResponseDue / minutesToResolutionDue (pode ser negativo)
+Regra RISK: faltando <= 20% do tempo restante OU <= 60 min (o menor dos dois).
+
+B) wipByAssignee:
+- agrupar tickets ativos por assignee
+- retornar: userId, name, countActive, countRisk, countBreached
+
+C) throughput:
+- no range (7d ou 30d): count resolved por dia (ou por semana) + total
+
+D) backlogByCategory:
+- count tickets ativos por categoria
+
+Observação:
+- Você já tem SLA cycles e dueAt. Use isso.
+- Considerar que reabertura cria novo cycle: dashboard usa SEMPRE o ciclo atual.
+
+1.2 Frontend
+Criar página admin:
+- /admin/ti (Admin-only)
+Com layout:
+- Cards topo: Backlog ativo / Em risco / Estourados / Resolvidos (range)
+- Tabela “Fila TI” com filtros:
+  - status, prioridade, categoria, texto (q)
+  - colunas: SLA (badges), título, categoria, setor solicitante, responsáveis, criado
+- Bloco “WIP por responsável” (tabela simples)
+- Bloco “Backlog por categoria” (tabela simples)
+(sem gráficos se não existir infra; se quiser gráfico, usar recharts simples depois)
+
+Adicionar card em /admin (Configurações) ou seção “TI” com link para /admin/ti.
+
+========================================================
+(2) BASE DE CONHECIMENTO (KB) POR CATEGORIA
+========================================================
+2.1 Banco (shared/schema.ts)
+Criar tabelas:
+A) kb_articles
+- id uuid
+- title varchar(200)
+- body text (markdown simples)
+- categoryId fk ticket_categories (nullable, mas no MVP exigir categoryId)
+- isPublished bool default true
+- createdBy fk users set null
+- updatedBy fk users set null
+- createdAt, updatedAt
+
+B) kb_article_views (métricas)
+- id uuid
+- articleId fk kb_articles cascade
+- userId fk users set null
+- viewedAt defaultNow
+
+C) kb_article_feedback
+- id uuid
+- articleId fk kb_articles cascade
+- userId fk users cascade
+- helpful bool
+- createdAt defaultNow
+Unique(articleId, userId)
+
+2.2 Backend
+Rotas:
+Usuário autenticado:
+- GET /api/kb?categoryId=&q=   (somente published)
+- GET /api/kb/:id             (published + log view)
+- POST /api/kb/:id/feedback   { helpful: boolean }
+
+Admin:
+- GET /api/admin/kb (inclui drafts/unpublished)
+- POST /api/admin/kb
+- PATCH /api/admin/kb/:id (title/body/categoryId/isPublished)
+- DELETE /api/admin/kb/:id (hard delete ok no MVP)
+
+Sugestão na abertura do chamado:
+- No endpoint GET /api/tickets/categories (ou em TicketNew):
+  - ao selecionar categoria, chamar GET /api/kb?categoryId=<id> e mostrar “Artigos relacionados”
+- No TicketNew UI:
+  - um painel lateral (ou abaixo) “Antes de abrir, veja isso” com 3 artigos top
+  - se usuário clicar e resolver, ele pode desistir de abrir o chamado (reduz demanda)
+
+Admin UI:
+- /admin/kb
+  - lista artigos + filtros (categoria, q, published)
+  - editor simples (textarea markdown)
+  - preview básico (opcional) ou só texto
+
+========================================================
+(3) TYPING TEST COM RANKING (mensal por setor + badge)
+========================================================
+3.1 Banco
+Criar tabelas:
+A) typing_texts
+- id uuid
+- language varchar(10) default "pt"
+- content text
+- difficulty int default 1
+- isActive bool default true
+- createdAt defaultNow
+
+B) typing_sessions (anti-cheat simples)
+- id uuid
+- userId fk users cascade
+- textId fk typing_texts set null
+- startedAt timestamp not null
+- expiresAt timestamp not null (startedAt + 10 min)
+- nonce varchar(32) unique
+- submittedAt timestamp nullable
+
+C) typing_scores
+- id uuid
+- userId fk users cascade
+- sectorId fk sectors set null  (setor “principal” do user no momento do score)
+- monthKey varchar(7) not null  (ex: "2026-02")
+- wpm int not null
+- accuracy numeric(5,2) not null
+- durationMs int not null
+- createdAt defaultNow
+Indexes: (monthKey, sectorId), (monthKey, userId)
+
+Regras:
+- Leaderboard usa o MELHOR score do usuário no monthKey (por setor).
+- Limitar tentativas: max 10 por dia por usuário (MVP: checar count em last 24h).
+
+3.2 Backend (routes)
+Usuário:
+- POST /api/typing/session
+  - escolhe um typing_text random ativo (por dificuldade opcional)
+  - cria session com startedAt=now, expiresAt=now+10m, nonce random
+  - retorna: sessionId, nonce, textContent
+- POST /api/typing/submit
+  body: { sessionId, nonce, typedText, durationMs }
+  - valida session existe, pertence ao user, não expirou, não submetida, nonce confere
+  - valida durationMs >= 20_000ms (20s) e <= 600_000ms
+  - calcula:
+    - accuracy = (caracteres corretos / total do texto) * 100 (comparação posição a posição)
+    - wpm = floor((charsTyped/5) / (durationMinutes))
+  - anti-cheat:
+    - se wpm > 160 => rejeitar (400)
+    - se accuracy < 50 => ainda aceitar mas não rankear? (MVP: aceitar normal)
+  - grava score com monthKey = YYYY-MM (America/Sao_Paulo)
+  - seta submittedAt na session
+  - retorna score calculado
+
+Leaderboards:
+- GET /api/typing/leaderboard?monthKey=YYYY-MM&scope=sector|global&sectorId=
+  - sector: ranking top 20 do setorId
+  - global: top 20 geral
+  - usar “best score per user” no monthKey:
+    - query: pegar max(wpm) (desempate por accuracy) por user
+- GET /api/typing/me?monthKey=
+  - retorna melhor score do user no mês + posição no setor + posição global
+
+Admin:
+- CRUD typing_texts:
+  - GET /api/admin/typing/texts
+  - POST /api/admin/typing/texts
+  - PATCH /api/admin/typing/texts/:id (content, difficulty, isActive)
+  - DELETE /api/admin/typing/texts/:id
+
+3.3 Frontend
+Criar páginas:
+- /typing
+  - botão “Iniciar teste”
+  - ao iniciar: chama /api/typing/session e mostra o texto alvo + textarea de digitação
+  - timer inicia quando usuário digitar o 1º caractere (client-side)
+  - botão “Finalizar” chama /api/typing/submit
+  - mostrar resultado (WPM, accuracy) + CTA “Ver ranking”
+- /typing/leaderboard
+  - tabs: “Meu setor” e “Global”
+  - seletor mês (default mês atual)
+  - mostra top 20 + destaque do usuário + posição
+- Admin:
+  - /admin/typing
+  - gerenciar textos (ativar/desativar/dificuldade)
+
+Badge no perfil:
+- No Profile, mostrar “Badge do mês” se:
+  - user está Top 3 do setor no mês atual => medalha 🥇🥈🥉
+  - senão, mostrar melhor score do mês e posição
+- Pegar dados via /api/typing/me
+
+========================================================
+INTEGRAÇÕES (opcional mas recomendado)
+========================================================
+- Notificações:
+  - Quando ticket criado/comment/status já existe.
+  - Adicionar notificação semanal “Top do Typing do mês” (NÃO fazer job agora; deixar spec em docs).
+- Auditoria:
+  - Logar eventos admin de KB e Typing texts (create/update/delete) em audit_logs.
+
+========================================================
+DOCS
+========================================================
+Criar:
+- docs/RUNBOOK_TI_DASHBOARD.md (como validar API do dashboard)
+- docs/RUNBOOK_KB.md (como criar artigos e validar sugestão no TicketNew)
+- docs/RUNBOOK_TYPING.md (como testar sessions/submit/leaderboard + limites)
+
+SMOKE TEST
+1) /admin/ti carrega e mostra fila + wip + backlog.
+2) KB: admin cria artigo, no TicketNew ao selecionar categoria aparece artigo relacionado.
+3) Typing: iniciar sessão, enviar submit, ver ranking por setor e global.
+4) Perfil: mostra badge/posição do mês.

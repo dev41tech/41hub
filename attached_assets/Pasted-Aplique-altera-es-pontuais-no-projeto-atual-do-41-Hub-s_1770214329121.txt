@@ -1,0 +1,108 @@
+Aplique alterações pontuais no projeto atual do “41 Hub” (sem refatorar tudo). Faça SOMENTE o que está descrito. Mantenha stack e padrões atuais.
+
+OBJETIVOS (4 frentes)
+1) Sidebar: corrigir layout do header para a logo não estourar e o texto “41 Hub / Portal corporativo” não sair da sidebar.
+2) Login: reduzir redundância — mostrar “41 Hub — Portal corporativo” (a logo já diz 41 Tech).
+3) Logo por tema: usar duas imagens PNG e alternar conforme tema (light/dark).
+4) Perfil: deixar a página útil e “corporativa” com:
+   - Foto do usuário (upload simples)
+   - Campo opcional de WhatsApp do usuário (para habilitar botão “Chamar no WhatsApp” no Meu Time)
+   - Seção “Meu Time” (colegas do mesmo setor)
+   - Seção “Minha atividade” (últimos acessos + favoritos)
+
+ASSETS
+- Vou colocar estes arquivos em client/public:
+  - /41tech-logo.png  (logo azul para tema claro)
+  - /41tech-logo-white.png (logo branca para tema escuro)
+- Você deve usar a logo correta conforme o tema:
+  - se theme == "dark": usar /41tech-logo-white.png
+  - caso contrário: /41tech-logo.png
+
+1) SIDEBAR (opção A)
+- No topo da sidebar:
+  - logo à esquerda com altura fixa pequena (h-8)
+  - ao lado, um bloco de texto com:
+    Linha 1: “41 Hub” (font-semibold)
+    Linha 2: “Portal corporativo” (text-muted-foreground)
+  - Esse bloco deve ter:
+    - quebra controlada e/ou ellipsis
+    - nunca pode “vazar” para fora da sidebar
+- Se precisar, use classes tailwind do tipo:
+  - flex items-center gap-3
+  - min-w-0 no container do texto
+  - truncate / leading-tight
+- NÃO aumente largura da sidebar.
+
+2) LOGIN (opção B)
+- Na tela de login principal:
+  - Mantenha a logo em destaque
+  - Substitua o título “41 Hub” por: “41 Hub — Portal corporativo”
+  - Evite duplicar “41 Tech” no texto (a logo já comunica).
+- Abaixo dos botões, o texto “Use suas credenciais corporativas…” pode permanecer.
+
+3) LOGO POR TEMA
+- Atualizar os componentes que exibem logo (Login e Sidebar) para escolher o arquivo dependendo do tema atual.
+- Se já existir ThemeProvider/useTheme, utilize-o.
+- Caso não exista, use a fonte de verdade já usada no sistema para alternar tema.
+
+4) PERFIL (valor real, sem toggle de tema dentro do perfil)
+- Remover qualquer controle de tema dentro da página de Perfil.
+- A página de Perfil deve mostrar:
+  A) “Meu perfil”
+     - Avatar/foto (se existir)
+     - Nome e email
+     - Setores e papéis (como badges)
+     - Campo opcional WhatsApp (string, ex: “5541999999999” ou “(41) 99999-9999”)
+     - Botão “Salvar” para WhatsApp
+  B) “Foto”
+     - Permitir upload de imagem (jpg/png) e salvar no backend (MVP simples).
+     - Pode ser endpoint POST /api/users/me/photo (multipart/form-data)
+     - Backend deve guardar a foto de forma simples (por enquanto pode ser no filesystem local /uploads, e salvar a URL no usuário).
+     - A URL da foto deve ser servida via backend (/uploads/...)
+  C) “Meu time”
+     - Listar colegas do(s) mesmo(s) setor(es) do usuário logado.
+     - Mostrar: foto (se tiver) / iniciais, nome, email, setor principal (ou lista curta), role.
+     - Se o colega tiver WhatsApp preenchido, mostrar botão “WhatsApp” que abre:
+       https://wa.me/<numero_limpo>
+     - Se não tiver WhatsApp, não mostrar botão.
+  D) “Minha atividade”
+     - Mostrar “Favoritos” (já existe) e “Acessados recentemente” (já existe).
+     - Pode ser uma listagem compacta (cards pequenos).
+
+BACKEND (novos endpoints e ajustes mínimos)
+- Adicionar coluna/campo no usuário para:
+  - whatsapp (string nullable)
+  - photo_url (string nullable)
+- Implementar endpoints:
+  - PATCH /api/users/me { whatsapp?: string }
+    - validar tamanho mínimo e máximo (ex: 8 a 20 chars) e aceitar vazio/nulo para remover
+  - POST /api/users/me/photo (multipart)
+    - validar tipo (jpg/png)
+    - limitar tamanho (ex: 2MB)
+    - salvar em /uploads (ou pasta equivalente)
+    - retornar photoUrl
+  - GET /api/users/team
+    - retorna lista de usuários do(s) mesmo(s) setor(es) do usuário logado
+    - incluir name, email, whatsapp, photoUrl, roles (setor + role)
+- Servir estáticos de /uploads com rota segura (somente autenticado):
+  - GET /api/uploads/<filename> (ou middleware auth no static)
+  - Não deixar público sem auth.
+
+FRONTEND (consumo)
+- Atualizar profile.tsx:
+  - campo WhatsApp com salvar via PATCH /api/users/me
+  - upload foto via POST /api/users/me/photo
+  - exibir seções Meu time e Minha atividade
+- Criar componente utilitário para “limpar número” (remover +, espaços, parênteses e hífens) antes de montar wa.me.
+- A seção “Meu time” deve consumir GET /api/users/team.
+
+REGRAS IMPORTANTES
+- Não refatore autenticação Microsoft.
+- Preserve rotas existentes.
+- Se não houver migrations, faça a alteração de schema do jeito já usado no projeto (ex: drizzle/prisma/sql). Siga o padrão existente.
+- Se houver seed, mantenha compatível.
+- Ao finalizar, mostre:
+  - arquivos alterados/criados
+  - resumo do comportamento final em bullets
+
+EXECUTE AGORA.

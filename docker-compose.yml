@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: techhub-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: techhub
+    ports:
+      - "5432:5432"
+    volumes:
+      - techhub_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d techhub"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  hub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: techhub-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+
+      # DB (ajuste se seu app usar outra variável; se já usa DATABASE_URL, perfeito)
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/techhub
+
+      # sessão (obrigatório)
+      SESSION_SECRET: "troque-por-um-segredo-forte"
+
+      # Entra (Microsoft)
+      AZURE_TENANT_ID: "SEU_TENANT_ID"
+      AZURE_CLIENT_ID: "SEU_CLIENT_ID"
+      AZURE_CLIENT_SECRET: "SEU_CLIENT_SECRET_VALUE"
+      AZURE_REDIRECT_URI: "https://hub.41tech.cloud/api/auth/entra/callback"
+      AZURE_POST_LOGOUT_REDIRECT_URI: "https://hub.41tech.cloud/"
+
+      # (opcional) se você implementou este env no código
+      # TICKETS_TARGET_SECTOR_NAME: "Tech"
+
+    ports:
+      - "5000:5000"
+    volumes:
+      # persistir anexos/arquivos (ajuste se seu código usa outro path)
+      - techhub_uploads:/app/uploads
+    restart: unless-stopped
+
+volumes:
+  techhub_pgdata:
+  techhub_uploads:

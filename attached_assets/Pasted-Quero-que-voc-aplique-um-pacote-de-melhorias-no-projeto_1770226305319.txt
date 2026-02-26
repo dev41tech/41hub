@@ -1,0 +1,78 @@
+Quero que você aplique um pacote de melhorias no projeto atual do 41 Hub. NÃO refatore o projeto inteiro. Faça alterações pontuais e consistentes.
+
+OBJETIVOS (CORE)
+1) Perfil: após salvar WhatsApp, a página deve mostrar o número salvo imediatamente (sem precisar refresh manual).
+2) Diretório de colaboradores:
+   - Em vez de “Meu time” somente, criar um “Diretório” com:
+     - filtro por setor (default: setor(es) do usuário)
+     - opção “Mostrar todos os setores”
+     - busca por nome/email/whatsapp
+     - listar usuários com foto (se houver), nome, email, setor(es) e botão WhatsApp se o usuário alvo tiver whatsapp.
+3) Foto: o avatar/foto do usuário deve aparecer também no canto inferior esquerdo (perfil ativo no sidebar).
+4) Admin → Usuários: permitir múltiplos setores para Coordenador e Usuário (multi-select de setores). Admin continua podendo tudo.
+5) Login: remover “41 Hub —” e deixar apenas “Portal Corporativo”.
+6) Sidebar topo: remover o texto ao lado do logo e deixar apenas a logo (evitar overflow).
+7) Recursos: adicionar configuração de “comportamento de abertura” por recurso, gerenciável no Admin:
+   - HUB_ONLY (abre apenas dentro do hub)
+   - NEW_TAB_ONLY (abre apenas em nova guia)
+   - BOTH (usuário escolhe)
+   Na UI, quando BOTH, mostrar botão com dropdown “Abrir aqui” e “Abrir em nova guia”.
+
+REGRAS IMPORTANTES
+- Preserve autenticação Microsoft existente.
+- Preserve banco e estilo; se precisar de migration, faça no padrão do repo (drizzle/prisma/sql).
+- Mantenha RBAC existente; apenas ajuste o CRUD de usuários/roles para suportar múltiplos setores.
+- Não implemente ainda o sistema de senha local completo (isso será outra etapa).
+
+DETALHES DE IMPLEMENTAÇÃO
+
+A) PERFIL (WhatsApp refletir)
+- No Profile, ao clicar “Salvar”, use a resposta da API para atualizar o estado local e/ou chame refreshUser() para refletir no header/sidebar imediatamente.
+
+B) DIRETÓRIO (substitui “Meu time”)
+- Criar endpoint GET /api/users/directory com query params:
+  - sectorId opcional
+  - q opcional (busca)
+  - all=true/false
+- Se all=false e não informar sectorId, retornar apenas usuários dos setores do usuário logado.
+- Resposta deve incluir: id, name, email, whatsapp (se houver), photoUrl (se houver), sectors/roles.
+- No frontend, na página de Perfil:
+  - Trocar a seção “Meu time” por “Diretório”
+  - Incluir select de setor + toggle “Mostrar todos”
+  - Incluir campo de busca
+  - Cards de usuários com botão WhatsApp (wa.me) somente se tiver whatsapp.
+
+C) FOTO NO SIDEBAR
+- Garanta que o objeto do usuário logado retornado pelo backend inclui photoUrl.
+- No componente do perfil do sidebar (canto inferior esquerdo), use AvatarImage src={user.photoUrl} e fallback com iniciais.
+
+D) MULTI-SETOR EM CRIAÇÃO/EDIÇÃO DE USUÁRIO (Admin)
+- No modal de criação/edição, usar multi-select de setores (checkbox list ou select múltiplo).
+- Backend deve aceitar sectorIds: string[] e salvar em user_sector_roles.
+- Permitir:
+  - Admin atribuir vários setores e um papel para cada setor OU (MVP) um papel único aplicado aos setores selecionados.
+  - Para MVP: aplique o MESMO role aos setores selecionados.
+
+E) LOGIN E SIDEBAR TOPO
+- Login: alterar texto para “Portal Corporativo”.
+- Sidebar topo: mostrar somente logo (sem texto) para evitar sobreposição.
+
+F) OPEN BEHAVIOR POR RECURSO
+- Adicionar coluna/field resources.openBehavior com enum: HUB_ONLY | NEW_TAB_ONLY | BOTH.
+- Admin Resources: adicionar select para openBehavior.
+- Viewer/UI:
+  - Se HUB_ONLY: abrir interno
+  - Se NEW_TAB_ONLY: abrir nova guia direto
+  - Se BOTH: mostrar botão dropdown com as duas opções
+- Mantenha o botão atual, mas torne-o condicional ao openBehavior.
+
+ADMIN (melhoria leve)
+- Na home do Admin (ou página principal do Admin), adicionar cards-resumo:
+  - Total usuários
+  - Total recursos
+  - Total setores
+  - Últimos logs (últimos 10) com link para auditoria
+
+Ao final, mostre:
+- Arquivos alterados/criados
+- Onde estão as mudanças (resumo)

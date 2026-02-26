@@ -1,0 +1,239 @@
+Você está no repositório 41-Tech-Hub (Express + Drizzle + Postgres + React + Wouter + React Query).
+Implemente o módulo de CHAMADOS (tickets) com SLA em horas úteis e categorias administráveis, seguindo o padrão existente.
+
+REGRAS:
+- Não quebre funcionalidades existentes.
+- Tipagem forte em shared/schema.ts e uso de Drizzle em server/storage.ts.
+- Permissões exatamente como descrito.
+- Logs: usar audit_logs (já existe) + criar ticket_events para métricas futuras.
+- Anexos devem ter endpoint de download com verificação de permissão (não usar /api/uploads genérico para anexos de ticket).
+- Target do atendimento é sempre o setor TI (setor "Tech" por padrão). Tornar configurável por env TICKETS_TARGET_SECTOR_NAME (default "Tech").
+
+1) Sessão persistente em produção:
+- server/index.ts: adicionar `app.set("trust proxy", 1)` logo após criar `app`.
+- server/routes.ts: trocar o store default do express-session por connect-pg-simple usando `pool` de server/db.ts:
+  - import connectPgSimple from "connect-pg-simple"
+  - const PgSession = connectPgSimple(session)
+  - store: new PgSession({ pool, createTableIfMissing: true })
+- manter cookie secure em produção e sameSite strict (como está).
+
+2) Banco (shared/schema.ts):
+Criar enums:
+- ticket_status: ["ABERTO","EM_ANDAMENTO","AGUARDANDO_USUARIO","RESOLVIDO","CANCELADO"]
+- ticket_priority: ["BAIXA","MEDIA","ALTA","URGENTE"]
+- ticket_category_branch: ["INFRA","DEV","SUPORTE"]
+- ticket_event_type: ["ticket_created","status_changed","assignees_changed","comment_added","attachment_added","resolved","reopened","priority_changed","category_changed"]
+
+Criar tabelas (padrão do projeto: varchar(36) id default gen_random_uuid()):
+A) ticket_categories:
+- id, name (varchar 255), branch (enum), parentId nullable (self fk),
+- isActive bool default true
+- createdBy (fk users set null), createdAt defaultNow
+Regras: categorias são hierárquicas 2 níveis (pai = branch, filho = serviço). Branch também fica no filho para facilitar filtro.
+
+B) ticket_sla_policies:
+- id, name (varchar 120 unique), priority (enum),
+- firstResponseMinutes int, resolutionMinutes int,
+- isActive bool default true, createdAt defaultNow
+(Deixar pronto para no futuro ter override por categoria, mas no MVP não precisa.)
+
+C) tickets:
+- id, title (varchar 255), description (text),
+- status (ticket_status default ABERTO),
+- priority (ticket_priority default MEDIA),
+- requesterSectorId (fk sectors not null)  // setor do solicitante
+- targetSectorId (fk sectors not null)     // setor TI (Tech)
+- categoryId (fk ticket_categories not null) // sempre subcategoria (folha)
+- createdBy (fk users not null),
+- relatedResourceId (fk resources nullable),
+- tags text[] default empty,
+- createdAt defaultNow, updatedAt defaultNow, closedAt nullable
+
+D) ticket_assignees (N responsáveis por ticket):
+- id, ticketId fk cascade, userId fk cascade,
+- assignedAt defaultNow, assignedBy fk users set null
+Unique(ticketId,userId)
+
+E) ticket_comments:
+- id, ticketId fk cascade,
+- authorId fk users set null,
+- body text, isInternal bool default false,
+- createdAt defaultNow
+
+F) ticket_attachments:
+- id, ticketId fk cascade,
+- uploadedBy fk users set null,
+- originalName varchar 255, storageName varchar 255 unique,
+- mimeType varchar 120, sizeBytes int,
+- createdAt defaultNow
+
+G) ticket_sla_cycles (reabertura = novo ciclo):
+- id, ticketId fk cascade,
+- cycleNumber int not null,
+- openedAt timestamp not null,
+- firstResponseDueAt timestamp not null,
+- resolutionDueAt timestamp not null,
+- firstResponseAt timestamp nullable,
+- resolvedAt timestamp nullable,
+- firstResponseBreached bool default false,
+- resolutionBreached bool default false
+
+H) ticket_events:
+- id, ticketId fk cascade,
+- actorUserId fk users set null,
+- type (ticket_event_type),
+- data jsonb default {},
+- createdAt defaultNow
+
+Também:
+- criar insert schemas via drizzle-zod para tickets (create), comments (create), categories (create), sla_policies (create).
+- exportar types Ticket, TicketCategory, TicketComment, TicketAttachment, TicketSlaCycle, etc.
+
+3) SLA em horas úteis (server/lib/sla.ts):
+Implementar função `addBusinessMinutes(startUtc: Date, minutes: number): Date` considerando:
+- seg–qui 08:00–18:00, sexta 08:00–17:00, sábado/domingo fechado
+- timezone America/Sao_Paulo com offset fixo UTC-03 no MVP (documentar em comentário)
+- reabertura gera novo ciclo com openedAt = agora
+Criar helper `computeSlaDueDates(openedAtUtc, priority) => {firstResponseDueAt, resolutionDueAt}`
+Usar a policy por prioridade (ticket_sla_policies). Se não existir policy, fallback:
+URGENTE (60/480), ALTA (240/1440), MEDIA (480/4320), BAIXA (1440/10080) em MINUTOS.
+
+4) Storage (server/storage.ts):
+Adicionar métodos no IStorage + implementar no DatabaseStorage:
+- getSectorByName(name)
+- listTicketCategoriesActive(targetSectorId) => retornar árvore (pai->filhos) e também lista plana (para dropdown)
+- admin: create/update/disable category
+- admin: list/create/update sla_policies
+- createTicket({title, description, requesterSectorId, categoryId, priority, relatedResourceId?, tags?}, actorUser)
+  - targetSectorId vem do setor TI (por nome env)
+  - cria ticket + cria cycle #1 com dueAt calculado + cria event ticket_created + audit log
+- listTicketsForUser(user, filters: {status?, q?, includeClosed?})
+  Permissões:
+  - Admin: vê tudo
+  - Coordenador: vê tickets cujo requesterSectorId esteja entre os setores onde ele é Coordenador + tickets que ele criou
+  - Usuário: vê tickets cujo requesterSectorId esteja em qualquer setor dele:
+      - por padrão listar só status ABERTO/EM_ANDAMENTO
+      - se includeClosed=true, retornar também RESOLVIDO/CANCELADO (histórico)
+- getTicketDetail(ticketId, user) com permissão
+- adminUpdateTicket(ticketId, patch) (admin only): status/priority/category/relatedResourceId/tags/title/description
+  - quando status muda para RESOLVIDO: preencher resolvedAt no ciclo atual, calcular breach flags, set closedAt no ticket
+  - quando reabrir (status volta para ABERTO): criar novo cycle (cycleNumber+1) e limpar closedAt
+- adminSetAssignees(ticketId, assigneeIds[]) (admin only):
+  - upsert na ticket_assignees (remover os que saíram, inserir os novos)
+  - quando primeira atribuição do ticket no ciclo atual e firstResponseAt ainda null: set firstResponseAt = now e calcular breach
+  - criar event assignees_changed + audit log
+- addTicketComment(ticketId, authorUser, {body, isInternal?}):
+  - user/coordinator: permitido só se ticket.status == AGUARDANDO_USUARIO e tiver acesso
+  - admin: sempre pode; isInternal só admin
+  - se for primeiro comentário de admin no ciclo e firstResponseAt null: set firstResponseAt
+  - criar event comment_added + audit log
+- addTicketAttachment(ticketId, authorUser, fileMeta) com permissão (mesmas regras do comentário):
+  - criar registro ticket_attachments + event attachment_added + audit log
+- listTicketComments(ticketId, user): se não-admin, ocultar isInternal=true
+- listTicketAttachments(ticketId, user)
+
+5) Rotas (server/routes.ts):
+Criar schemas zod para tickets/categories/sla/comments.
+Criar rotas protegidas:
+A) CATEGORIAS
+- GET /api/tickets/categories (requireAuth): retorna árvore de categorias ativas do TI
+- Admin:
+  - GET /api/admin/tickets/categories
+  - POST /api/admin/tickets/categories
+  - PATCH /api/admin/tickets/categories/:id
+  - DELETE /api/admin/tickets/categories/:id (soft delete => isActive=false)
+
+B) SLA POLICIES (admin):
+- GET /api/admin/tickets/sla-policies
+- POST /api/admin/tickets/sla-policies
+- PATCH /api/admin/tickets/sla-policies/:id
+
+C) TICKETS
+- GET /api/tickets?status=&q=&includeClosed=true|false
+- POST /api/tickets (requireAdminOrCoordinator):
+  - body inclui requesterSectorId, categoryId, title, description, priority, relatedResourceId?, tags?
+  - validar que coordenador só cria para requesterSectorId que ele coordena
+- GET /api/tickets/:id
+- PATCH /api/tickets/:id (admin only)
+- PUT /api/tickets/:id/assignees (admin only) { assigneeIds: string[] }
+- GET /api/tickets/:id/comments
+- POST /api/tickets/:id/comments
+- GET /api/tickets/:id/attachments
+- POST /api/tickets/:id/attachments (multipart/form-data "file")
+- GET /api/tickets/:id/attachments/:attachmentId/download
+  - IMPORTANTE: checar permissão do ticket antes de sendFile
+
+Uploads:
+- Usar multer separado para anexos (não reaproveitar o de foto):
+  - destino: uploads/tickets/
+  - filename: `${ticketId}-${Date.now()}-${random}.${ext}`
+  - limites: 10MB
+  - permitir: image/jpeg, image/png, application/pdf
+
+6) Frontend:
+Adicionar item "Chamados" no menu principal (para todos):
+- client/src/components/app-sidebar.tsx: importar ícone Ticket e adicionar em mainMenuItems.
+
+Rotas:
+- client/src/App.tsx:
+  - /tickets -> TicketsIndex
+  - /tickets/new -> TicketsNew
+  - /tickets/:id -> TicketsDetail
+  - /admin/tickets/categories -> AdminTicketCategories
+  - /admin/tickets/sla -> AdminTicketSlaPolicies
+
+Páginas:
+A) TicketsIndex:
+- Tabs: "Ativos" (ABERTO/EM_ANDAMENTO) e "Histórico" (includeClosed=true)
+- Filtros: busca (q), status (para admin/coordinator), categoria (opcional)
+- Ações:
+  - Coordenador/Admin: botão "Novo chamado"
+  - Usuário: sem botão
+- Tabela com: SLA (badge "Em dia"/"Em risco"/"Estourado"), título, categoria, prioridade, status, responsáveis, criado em.
+
+B) TicketsNew:
+- Somente Admin/Coordenador
+- Campos:
+  - requesterSectorId (dropdown com os setores do user; para coordenador só os setores em que ele é Coordenador)
+  - categoria (dropdown agrupado por branch Infra/Dev/Suporte)
+  - prioridade
+  - título, descrição
+  - anexos (opcional no MVP, pode deixar só no detalhe)
+- POST /api/tickets e redirect para /tickets/:id
+
+C) TicketsDetail:
+- Header com: título, status, prioridade, categoria, requester sector
+- Se Admin:
+  - editar status/priority/categoria
+  - atribuir responsáveis (multi-select usando /api/users/directory?sectorId=<Tech>&all=true)
+- Comentários:
+  - listar comentários (ocultar internos para não-admin)
+  - permitir comentar se:
+    - admin sempre
+    - user/coordinator apenas se status == AGUARDANDO_USUARIO
+- Anexos:
+  - lista + botão upload (mesma regra do comentário)
+  - download via endpoint seguro
+
+D) AdminTicketCategories:
+- CRUD com tabela e modal (padrão das páginas admin já existentes)
+- Criar parent roots (Infra/Dev/Suporte) e subcategorias
+- Ativar/desativar (soft delete)
+
+E) AdminTicketSlaPolicies:
+- CRUD de policies por prioridade (padrão admin)
+
+7) Bootstrap (server/seed.ts ou function separada chamada no startup):
+Sem quebrar o seed atual:
+- Adicionar uma função `ensureTicketDefaults()` que roda sempre (mesmo se db já seeded):
+  - garante existence de sla_policies padrão por prioridade (name único)
+  - garante roots de categorias Infra/Dev/Suporte (isActive=true) no target sector TI
+NÃO criar leafs específicos (deixar para admin).
+
+8) Docs:
+Criar docs/RUNBOOK_TICKETS.md com:
+- npm run db:push
+- endpoints de teste (curl) para criar ticket, listar, comentar, atribuir responsáveis, anexar.
+- checklist de permissão (Admin/Coordenador/Usuário)
+
+No final: garanta `npm run check` sem erros.

@@ -1,0 +1,193 @@
+Refatorar o HUB (41-Tech-Hub) com foco em: (A) centralizar Admin em “Configurações”, (B) mover “Atividade Recente” para Auditoria, (C) criar Notificações, (D) melhorar UX do WhatsApp no Perfil, (E) tema sync best-effort Hub→App.
+
+REGRAS:
+- Não quebrar rotas existentes (se precisar, manter redirects).
+- Enforce permissão no backend e esconder no frontend.
+- Tudo com React Query + shadcn/ui, seguindo padrão atual.
+- Garantir `npm run check`.
+
+========================================
+A) ADMIN -> CONFIGURAÇÕES (centralizar e enxugar)
+========================================
+A1) Sidebar
+- Ajustar `AppSidebar`:
+  - `isAdmin` deve ser APENAS Admin (não incluir Coordenador).
+    Ex: user?.isAdmin || user?.roles?.some(r => r.roleName==="Admin")
+  - Renomear grupo “Administração” para “Configurações”.
+  - Em vez do item “Admin”, criar item único:
+      { title: "Configurações", url: "/admin", icon: Settings }
+  - (Opcional) Não listar subitens no sidebar para não poluir; a navegação admin fica dentro da página /admin.
+
+A2) AdminIndex vira “Configurações”
+- Atualizar `client/src/pages/admin/index.tsx`:
+  - Título: “Configurações”
+  - Remover completamente o bloco/lista de “Atividade recente” desta página.
+  - Manter cards de navegação (com contadores), mas reorganizar:
+    1) Usuários (inclui senha padrão dentro)
+    2) Configurações de Chamados (Categorias + SLA dentro)
+    3) Auditoria (inclui Atividade Recente dentro)
+    4) Notificações (novo)
+    5) (Opcional) Setores e Recursos podem ficar como cards também, mas sem “Configurações” separado.
+- Se existia “AdminSettings” separado, remover o card “Configurações” antigo.
+
+A3) “Usuários” centraliza senha padrão
+- Manter rota /admin/users, mas incorporar a configuração de senha padrão NELA:
+  - Dentro de AdminUsers, criar Tabs: “Usuários” e “Senha padrão (local)”
+  - A tab “Senha padrão” usa o endpoint existente /api/admin/settings:
+      GET /api/admin/settings
+      PATCH /api/admin/settings com { DEFAULT_LOCAL_PASSWORD: "..." }
+  - Remover a necessidade de /admin/settings no menu. (Pode manter a rota como compatibilidade, mas sem link.)
+
+A4) “Configurações de Chamados” (enxuto)
+- Criar uma página wrapper /admin/tickets-settings:
+  - Tabs: “Categorias” e “SLA”
+  - Reusar os componentes/páginas atuais (AdminTicketCategories / AdminTicketSlaPolicies) como conteúdo das tabs.
+- Ajustar AdminIndex para apontar para /admin/tickets-settings.
+- Ajustar router App.tsx para incluir /admin/tickets-settings.
+- Se existiam rotas antigas /admin/tickets/categories e /admin/tickets/sla:
+  - manter funcionando (compat)
+  - mas não exibir no menu; opcional: redirecionar ambas para /admin/tickets-settings.
+
+A5) “Atividade Recente” vai pra Auditoria
+- Em AdminAudit:
+  - Adicionar no topo um Card “Atividade recente” mostrando os 10 logs mais recentes (pode ser os primeiros do array).
+  - Manter a tabela e filtros como estão.
+- Garantir que AdminIndex não mostre mais essa seção.
+
+========================================
+B) RENOMEAR textos redundantes
+========================================
+- Onde aparecer “Administração” + “Admin”, trocar para “Configurações”.
+- Ex: SidebarGroupLabel “Configurações”, e dentro /admin o header “Configurações do Hub”.
+
+========================================
+C) NOTIFICAÇÕES (sino no header + toggle global admin)
+========================================
+C1) Banco (shared/schema.ts)
+Criar:
+- enum notification_type: ["ticket_created","ticket_comment","ticket_status","resource_updated"]
+- table notification_settings:
+  - id uuid, type notification_type UNIQUE, enabled bool default true, createdAt, updatedAt
+- table notifications:
+  - id uuid
+  - recipientUserId fk users (cascade)
+  - type notification_type
+  - title varchar(180)
+  - message text
+  - linkUrl varchar(255) nullable (ex: "/tickets/<id>")
+  - data jsonb default {}
+  - isRead bool default false
+  - createdAt defaultNow
+
+C2) Storage (server/storage.ts)
+Adicionar métodos:
+- getNotificationSettings(): list
+- setNotificationSetting(type, enabled): upsert
+- createNotifications(recipients: string[], payload): insert em lote
+- listUserNotifications(userId, {limit, offset}): retorna mais recentes
+- countUnreadNotifications(userId)
+- markNotificationRead(userId, notificationId)
+- markAllNotificationsRead(userId)
+
+Criar helper interno:
+- isNotificationEnabled(type): consulta setting; se não existir, considera true
+
+C3) Seed / ensure defaults
+- Na seed (ou função ensure*), garantir que existem linhas em notification_settings para todos os tipos (enabled=true).
+
+C4) Rotas (server/routes.ts)
+Usuário:
+- GET /api/notifications?limit=20
+- GET /api/notifications/unread-count
+- POST /api/notifications/:id/read
+- POST /api/notifications/read-all
+
+Admin:
+- GET /api/admin/notifications/settings
+- PATCH /api/admin/notifications/settings com { type, enabled }
+
+C5) Disparo de notificações (mínimo viável)
+- Nos pontos onde já existem ações:
+  1) Ticket criado:
+     - notificar todos admins (exceto actor)
+     - title: "Novo chamado"
+     - message: "<Nome> abriu: <titulo>"
+     - linkUrl: "/tickets/<id>"
+  2) Comentário em ticket:
+     - notificar: admins + assignees + createdBy (exceto actor)
+     - se comentário isInternal: notificar apenas admins + assignees
+  3) Mudança de status do ticket:
+     - notificar: admins + assignees + createdBy (exceto actor)
+  4) Resource atualizado (quando admin edita app/dashboard):
+     - notificar todos admins (exceto actor)
+     - opcional: também notificar usuários que favoritaram o recurso (se fácil via join favorites)
+
+IMPORTANTE:
+- Antes de inserir notificação, checar notification_settings enabled para o type.
+- Não criar notificação para o próprio actor.
+
+C6) UI (Bell no header)
+- Criar componente `client/src/components/notification-bell.tsx`
+  - Ícone sino no header (ao lado do ThemeToggle)
+  - Badge com unread count
+  - Dropdown listando as últimas 10 notificações
+  - Clique marca como lida e navega para linkUrl (se existir)
+  - Botão “Marcar todas como lidas”
+- Injetar no header em `client/src/App.tsx` (na barra superior do layout autenticado).
+
+C7) Admin UI (toggle global)
+- Criar página `client/src/pages/admin/notifications.tsx`:
+  - lista tipos + switch enabled/disabled
+  - descreve cada tipo em PT-BR
+- Adicionar card na página /admin (Configurações) apontando para /admin/notifications
+- Adicionar rota no Router.
+
+========================================
+D) PERFIL — WhatsApp (UX que você pediu)
+========================================
+- No Profile:
+  - Se user.whatsapp existir e NÃO estiver editando:
+     - esconder Input
+     - mostrar linha abaixo do e-mail: “WhatsApp: <número>”
+     - botão “Alterar WhatsApp”
+        Ao clicar:
+          - imediatamente chamar PATCH /api/users/me { whatsapp: null }
+          - ao sucesso, entrar em modo edição (input aparece vazio)
+  - Se user.whatsapp não existir OU estiver editando:
+     - mostrar input + botão salvar
+     - ao salvar com sucesso:
+        - sair do modo edição (input some, exibe o número)
+- Garantir que o diretório (TeamMember) reflita o whatsapp atualizado (já invalida query).
+
+========================================
+E) THEME SYNC best-effort (Hub -> App)
+========================================
+- Não garantir 100% porque apps podem ser externos. Implementar “best effort” sem quebrar apps:
+1) No ThemeProvider (ou ThemeToggle):
+   - sempre que theme mudar:
+     - disparar window.dispatchEvent(new CustomEvent("hub-theme-changed", { detail: { theme } }))
+2) No ResourceViewer:
+   - quando estiver em IFRAME:
+     - ao carregar e ao receber evento "hub-theme-changed":
+        - tentar `iframeRef.current?.contentWindow?.postMessage({ type:"HUB_THEME", theme }, "*")`
+   - ao abrir em new tab ou redirect:
+        - anexar query param `hubTheme=<theme>` à URL (sem duplicar params)
+- NÃO mexer no tema interno do app se ele não suportar (isso só habilita integração quando o app aceitar).
+
+========================================
+SMOKE TEST
+========================================
+1) Coordenador não vê “Configurações” no menu (só admin vê).
+2) /admin renomeado para Configurações e sem atividade recente.
+3) Auditoria mostra “Atividade recente” no topo + tabela normal.
+4) Usuários possui tab de senha padrão, salvando via PATCH /api/admin/settings.
+5) Notificações:
+   - abrir ticket gera notificação para admins
+   - comentar gera notificação
+   - sino mostra unread e marca como lida
+   - admin desabilita tipo e para de gerar
+6) Perfil:
+   - whatsapp salvo some input, aparece texto
+   - clicar “Alterar” apaga do servidor e reabre input.
+
+Implemente tudo mantendo consistência visual e sem quebrar rotas existentes.

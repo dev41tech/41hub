@@ -1424,6 +1424,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         description,
         requestData: parsed.data.requestData || {},
       }, req.user!);
+      
+      const full = await storage.getTicketDetail(ticket.id, req.user!);
+
+      const baseUrl = process.env.PUBLIC_BASE_URL || "";
 
       try {
         const enabled = await storage.isNotificationEnabled("ticket_created");
@@ -1443,14 +1447,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         console.error("Error dispatching ticket_created notification:", notifErr);
       }
 
-      emitEvent("ticket_created", {
-        ticketId: ticket.id,
-        number: ticket.number,
-        title: parsed.data.title,
-        categoryId: parsed.data.categoryId,
-        priority: ticket.priority,
-        createdBy: req.user!.id,
-        status: ticket.status,
+      void emitEvent("ticket_created", {
+        ticketId: full.id,
+        title: full.title,
+        status: full.status,
+        priority: full.priority,
+        createdAt: full.createdAt,
+        linkUrl: `${baseUrl}/tickets/${ticket.id}`,
+
+        requesterSector: {
+          id: full.requesterSectorId,
+          name: full.requesterSectorName,
+        },
+
+        targetSector: {
+          id: full.targetSectorId,
+          name: full.targetSectorName,
+        },
+
+        category: {
+          id: full.categoryId,
+          name: full.categoryName,
+          branch: full.categoryBranch,
+        },
+
+        requester: {
+          id: full.createdBy,
+          name: full.creatorName,
+          email: full.creatorEmail,
+        },
+
+        assignees: (full.assignees ?? []).map((a: any) => ({ 
+          id: a.id, 
+          name: a.name, 
+          email: a.email, 
+        })),
+
+        sla: full.currentCycle
+          ? {
+            firstResposneDueAt: ticket.currentCycle.firstResponseDueAt,
+            resolutionDueAt: ticket.currentCycle.resolutionDueAt,
+          }
+          : null,
       });
 
       res.status(201).json(ticket);

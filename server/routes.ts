@@ -1424,10 +1424,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         description,
         requestData: parsed.data.requestData || {},
       }, req.user!);
-      
-      const full = await storage.getTicketDetail(ticket.id, req.user!);
 
-      const baseUrl = process.env.PUBLIC_BASE_URL || "";
+      const baseUrl = (process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
+
+      const actor = {
+        id: req.user!.id,
+        name: req.user!.name,
+        email: req.user!.email,
+      };
 
       try {
         const enabled = await storage.isNotificationEnabled("ticket_created");
@@ -1447,54 +1451,73 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         console.error("Error dispatching ticket_created notification:", notifErr);
       }
 
-      void emitEvent("ticket_created", {
-        ticketId: full.id,
-        title: full.title,
-        status: full.status,
-        priority: full.priority,
-        createdAt: full.createdAt,
-        linkUrl: `${baseUrl}/tickets/${ticket.id}`,
+      setImmediate(async () => {
+        try {
+          const full = await storage.getTicketDetail(ticket.id, req.user!).catch(() => null);
 
-        requesterSector: {
-          id: full.requesterSectorId,
-          name: full.requesterSectorName,
-        },
+          const data = full
+            ? {
+                ticketId: full.id,
+                title: full.title,
+                status: full.status,
+                priority: full.priority,
+                createdAt: full.createdAt,
+                linkUrl: baseUrl ? `${baseUrl}/tickets/${full.id}` : `/tickets/${full.id}`,
 
-        targetSector: {
-          id: full.targetSectorId,
-          name: full.targetSectorName,
-        },
+                requesterSector: {
+                  id: full.requesterSectorId,
+                  name: full.requesterSectorName,
+                },
+                targetSector: {
+                  id: full.targetSectorId,
+                  name: full.targetSectorName,
+                },
+                category: {
+                  id: full.categoryId,
+                  name: full.categoryName,
+                  branch: full.categoryBranch,
+                },
+                requester: {
+                  id: full.createdBy,
+                  name: full.creatorName,
+                  email: full.creatorEmail,
+                },
+                assignees: (full.assignees ?? []).map((a: any) => ({
+                  id: a.id,
+                  name: a.name,
+                  email: a.email,
+                })),
 
-        category: {
-          id: full.categoryId,
-          name: full.categoryName,
-          branch: full.categoryBranch,
-        },
-
-        requester: {
-          id: full.createdBy,
-          name: full.creatorName,
-          email: full.creatorEmail,
-        },
-
-        assignees: (full.assignees ?? []).map((a: any) => ({ 
-          id: a.id, 
-          name: a.name, 
-          email: a.email, 
-        })),
-
-        sla: full.currentCycle
-          ? {
-            firstResposneDueAt: ticket.currentCycle.firstResponseDueAt,
-            resolutionDueAt: ticket.currentCycle.resolutionDueAt,
-          }
-          : null,
+                sla: full.currentCycle
+                  ? {
+                      firstResponseDueAt: full.currentCycle.firstResponseDueAt,
+                      resolutionDueAt: full.currentCycle.resolutionDueAt,
+                    }
+                  : null,
+              }
+            : {
+                // fallback: não quebra a criação do chamado
+                ticketId: ticket.id,
+                title: parsed.data.title,
+                status: ticket.status,
+                priority: ticket.priority,
+                createdAt: ticket.createdAt,
+                linkUrl: baseUrl ? `${baseUrl}/tickets/${ticket.id}` : `/tickets/${ticket.id}`,
+                requester: actor,
+                requesterSector: { id: parsed.data.requesterSectorId, name: null },
+                category: { id: parsed.data.categoryId, name: null, branch: null },
+                sla: null,
+              };
+          await emitEvent("ticket_created", data);
+        } catch (err) {
+          console.error("ticket_created webhook failed:", err);
+        }
       });
-
-      res.status(201).json(ticket);
+      
+      return res.status(201).json(ticket);
     } catch (error: any) {
       console.error("Error creating ticket:", error);
-      res.status(500).json({ error: error.message || "Failed to create ticket" });
+      return res.status(500).json({ error: error.message || "Failed to create ticket" });
     }
   });
 

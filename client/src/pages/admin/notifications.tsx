@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { primeAudio, playNotify } from "@/lib/sound";
 
 interface NotificationSetting {
   id: string;
@@ -116,6 +117,14 @@ export default function AdminNotifications() {
                     disabled={toggleMutation.isPending}
                     data-testid={`switch-notification-${setting.type}`}
                   />
+                  <button
+                    onClick={async () => {
+                      primeAudio();
+                      await playNotify();
+                    }}
+                  >
+                    Testar som
+                  </button>
                 </div>
               );
             })

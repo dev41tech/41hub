@@ -115,8 +115,9 @@ function AppContent() {
 
   // Unlock audio on first user gesture (works for any page, auth or not)
   useEffect(() => {
-    document.addEventListener("pointerdown", primeAudio, { once: true });
-    return () => document.removeEventListener("pointerdown", primeAudio);
+    const onFirstGesture = () => primeAudio();
+    document.addEventListener("pointerdown", onFirstGesture, { once: true });
+    return () => document.removeEventListener("pointerdown", onFirstGesture);
   }, []);
 
   if (isLoading) {

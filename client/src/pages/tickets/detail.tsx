@@ -27,6 +27,8 @@ import {
 } from "@/components/ui/dialog";
 import {
   ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
   Clock,
   MessageSquare,
   Paperclip,
@@ -354,7 +356,8 @@ export default function TicketsDetail() {
     },
   });
 
-  const canComment = !isUserRole && (isAdmin || ticket?.status === "AGUARDANDO_USUARIO");
+  // Admins and coordinators can always comment/attach; plain users cannot.
+  const canComment = isAdmin || isCoordinator;
 
   function handleSaveDeadline() {
     if (!newDeadline) return;
@@ -798,6 +801,60 @@ export default function TicketsDetail() {
                 <CardTitle className="text-base">Ações Admin</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
+                {/* ── Quick actions ── */}
+                {ticket.status !== "RESOLVIDO" && ticket.status !== "CANCELADO" && (
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground uppercase tracking-wide">
+                      Ações rápidas
+                    </Label>
+                    <div className="grid grid-cols-1 gap-2">
+                      {ticket.status === "ABERTO" && (
+                        <Button
+                          size="sm"
+                          className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+                          onClick={() => updateMutation.mutate({ status: "EM_ANDAMENTO" })}
+                          disabled={updateMutation.isPending}
+                          data-testid="button-quick-start"
+                        >
+                          <ArrowRight className="h-4 w-4 mr-1" />
+                          Iniciar atendimento
+                        </Button>
+                      )}
+                      {(ticket.status === "ABERTO" || ticket.status === "EM_ANDAMENTO") && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full"
+                          onClick={() => requestInfoMutation.mutate()}
+                          disabled={requestInfoMutation.isPending}
+                          data-testid="button-request-info"
+                        >
+                          {requestInfoMutation.isPending ? (
+                            <Loader2 className="h-4 w-4 animate-spin mr-1" />
+                          ) : (
+                            <HelpCircle className="h-4 w-4 mr-1" />
+                          )}
+                          Pedir informações
+                        </Button>
+                      )}
+                      {(ticket.status === "EM_ANDAMENTO" || ticket.status === "AGUARDANDO_USUARIO") && (
+                        <Button
+                          size="sm"
+                          className="w-full bg-green-600 hover:bg-green-700 text-white"
+                          onClick={() => updateMutation.mutate({ status: "RESOLVIDO" })}
+                          disabled={updateMutation.isPending}
+                          data-testid="button-quick-resolve"
+                        >
+                          <CheckCircle2 className="h-4 w-4 mr-1" />
+                          Concluir chamado
+                        </Button>
+                      )}
+                    </div>
+                    <Separator />
+                  </div>
+                )}
+
+                {/* ── Status select ── */}
                 <div className="space-y-2">
                   <Label className="text-xs">Status</Label>
                   <Select
@@ -871,24 +928,6 @@ export default function TicketsDetail() {
                     )}
                   </Button>
                 </div>
-
-                <Separator />
-
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  size="sm"
-                  onClick={() => requestInfoMutation.mutate()}
-                  disabled={requestInfoMutation.isPending || ticket.status === "RESOLVIDO" || ticket.status === "CANCELADO"}
-                  data-testid="button-request-info"
-                >
-                  {requestInfoMutation.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin mr-1" />
-                  ) : (
-                    <HelpCircle className="h-4 w-4 mr-1" />
-                  )}
-                  Pedir infos pendentes
-                </Button>
               </CardContent>
             </Card>
           )}

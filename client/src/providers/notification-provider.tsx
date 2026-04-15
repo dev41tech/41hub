@@ -26,7 +26,7 @@ export function NotificationProvider() {
   const { data: recent = [] } = useQuery<Notification[]>({
     queryKey: ["/api/notifications", "provider-poll"],
     queryFn: async () => {
-      const res = await fetch("/api/notifications?limit=5", {
+      const res = await fetch("/api/notifications?limit=20", {
         credentials: "include",
       });
       if (!res.ok) return [];
@@ -39,40 +39,41 @@ export function NotificationProvider() {
   useEffect(() => {
     if (!recent.length) return;
 
-    // newest id in this batch
-    const maxId = recent.reduce(
-      (max, n) => (n.id > max ? n.id : max),
-      recent[0].id
-    );
+    const newestId = recent[0].id;
 
     // First load: just record the baseline, no toasts
     if (!initializedRef.current) {
-      lastSeenIdRef.current = maxId;
       initializedRef.current = true;
+      lastSeenIdRef.current = newestId;
       recent.forEach((n) => shownIdsRef.current.add(n.id));
       return;
     }
 
-    if (lastSeenIdRef.current === null || maxId <= lastSeenIdRef.current) return;
+    const lastSeen = lastSeenIdRef.current;
+    if (!lastSeen) {
+      lastSeenIdRef.current = newestId;
+      return;
+    }
 
-    const newNotifs = recent
-      .filter(
-        (n) =>
-          n.id > lastSeenIdRef.current! && !shownIdsRef.current.has(n.id)
-      )
-      // oldest → newest so toasts appear in chronological order
-      .sort((a, b) => (a.id < b.id ? -1 : 1));
+    if (newestId === lastSeen) return;
 
-    for (const notif of newNotifs) {
+    const newOnes: Notification[] = [];
+    for (const n of recent) {
+      if (n.id === lastSeen) break;
+      if (!shownIdsRef.current.has(n.id)) newOnes.push(n);
+    }
+
+    lastSeenIdRef.current = newestId;
+
+    for (const notif of newOnes.reverse()) {
       shownIdsRef.current.add(notif.id);
       toast({ title: notif.title, description: notif.message });
     }
 
-    if (newNotifs.length > 0) {
+    if (newOnes.length > 0) {
       playNotify();
+      console.log("[Notify] playNotify()", newOnes.length);
     }
-
-    lastSeenIdRef.current = maxId;
   }, [recent, toast]);
 
   // Renders nothing – pure side-effect component

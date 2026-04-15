@@ -117,14 +117,6 @@ export default function AdminNotifications() {
                     disabled={toggleMutation.isPending}
                     data-testid={`switch-notification-${setting.type}`}
                   />
-                  <button
-                    onClick={async () => {
-                      primeAudio();
-                      await playNotify();
-                    }}
-                  >
-                    Testar som
-                  </button>
                 </div>
               );
             })

@@ -45,28 +45,44 @@ export function primeAudio() {
   }
 }
 
-function playWebAudioBeep() {
+async function ensureAudioCtxRunning(): Promise<AudioContext | null> {
   try {
-    const AC =
-      (window as any).AudioContext || (window as any).webkitAudioContext;
-    if (!audioCtx && AC) audioCtx = new AC() as AudioContext;
-    if (!audioCtx) return;
-    if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+    const AC = (window as any).AudioContext || (window as any).webKitAudioContext;
+    if (!AC) return null;
 
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.type = "sine";
-    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.12);
-    osc.start(audioCtx.currentTime);
-    osc.stop(audioCtx.currentTime + 0.12);
-    if (import.meta.env.DEV) console.log("[Sound] WebAudio beep played");
-  } catch (err) {
-    if (import.meta.env.DEV) console.log("[Sound] WebAudio beep failed:", err);
+    if (!audioCtx) audioCtx = new AC() as AudioContext;
+
+    if (audioCtx.state === "suspended") {
+      await audioCtx.resume();
+    }
+    return audioCtx.state === "running" ? audioCtx : null; 
+  } catch {
+    return null;
   }
+}
+
+async function playWebAudioBeep() {
+  const ctx = await ensureAudioCtxRunning();
+  if(!ctx) {
+    if (import.meta.env.DEV) console.log("[Sound] WebAudio ctx not running");
+    return;
+  }
+
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(880, ctx.currentTime);
+
+  gain.gain.setValueAtTime(0.08, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
+
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + 0.12);
+
+  if (import.meta.env.DEV) console.log("[Sound] WebAudio beep played");
 }
 
 export async function playNotify() {

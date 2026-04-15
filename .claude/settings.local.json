@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(export PATH=\"$PATH:/c/Program Files/nodejs:/c/Users/kauan.brasileiro/AppData/Roaming/npm\")",
+      "Bash(npx tsc:*)",
+      "Bash(node -e \"require\\('child_process'\\).execSync\\('npx tsc --noEmit', {cwd: '/c/Users/kauan.brasileiro/Documents/1. Apps/41-Tech-Hub/.claude/worktrees/amazing-chaum', stdio: 'inherit'}\\)\")",
+      "Bash(node -e \"const {execSync}=require\\('child_process'\\);try{const o=execSync\\('npx tsc --noEmit',{cwd:'C:/Users/kauan.brasileiro/Documents/1. Apps/41-Tech-Hub/.claude/worktrees/amazing-chaum',encoding:'utf8',timeout:90000}\\);console.log\\(o||'OK - no errors'\\);}catch\\(e\\){console.log\\(e.stdout||''\\);console.log\\(e.stderr||''\\);}\")",
+      "Read(//usr/local/bin/**)",
+      "Bash(find /usr -name \"node\" -type f)",
+      "Bash(\"C:\\\\Program Files\\\\nodejs\\\\npx.cmd\" tsc --noEmit --project \"C:\\\\Users\\\\kauan.brasileiro\\\\Documents\\\\1. Apps\\\\41-Tech-Hub\\\\.claude\\\\worktrees\\\\amazing-chaum\\\\tsconfig.json\")",
+      "Bash(cmd /c \"\\\\\"C:\\\\Program Files\\\\nodejs\\\\npx.cmd\\\\\" tsc --noEmit --project \\\\\"C:\\\\Users\\\\kauan.brasileiro\\\\Documents\\\\1. Apps\\\\41-Tech-Hub\\\\.claude\\\\worktrees\\\\amazing-chaum\\\\tsconfig.json\\\\\" 2>&1\")",
+      "Bash(powershell.exe -Command \"cd 'C:\\\\Users\\\\kauan.brasileiro\\\\Documents\\\\1. Apps\\\\41-Tech-Hub\\\\.claude\\\\worktrees\\\\amazing-chaum'; & 'C:\\\\Program Files\\\\nodejs\\\\npx.cmd' tsc --noEmit 2>&1\")",
+      "Read(//c/Users/kauan.brasileiro/AppData/Local/Programs/Git/mingw64/bin/**)"
+    ]
+  }
+}

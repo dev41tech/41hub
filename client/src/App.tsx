@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -13,8 +14,10 @@ import {
 import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { NotificationBell } from "@/components/notification-bell";
+import { NotificationProvider } from "@/providers/notification-provider";
 import { ThemeLogo } from "@/components/theme-logo";
 import { Skeleton } from "@/components/ui/skeleton";
+import { primeAudio } from "@/lib/sound";
 import NotFound from "@/pages/not-found";
 import Login from "@/pages/login";
 import LocalLogin from "@/pages/local-login";
@@ -86,6 +89,8 @@ function AuthenticatedLayout() {
 
   return (
     <SidebarProvider style={sidebarStyle as React.CSSProperties}>
+      {/* Global notification polling + toast + sound – mounted once here */}
+      <NotificationProvider />
       <div className="flex h-screen w-full">
         <AppSidebar />
         <SidebarInset className="flex flex-col flex-1 overflow-hidden">
@@ -107,6 +112,12 @@ function AuthenticatedLayout() {
 
 function AppContent() {
   const { isAuthenticated, isLoading } = useAuth();
+
+  // Unlock audio on first user gesture (works for any page, auth or not)
+  useEffect(() => {
+    document.addEventListener("pointerdown", primeAudio, { once: true });
+    return () => document.removeEventListener("pointerdown", primeAudio);
+  }, []);
 
   if (isLoading) {
     return (

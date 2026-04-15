@@ -1,79 +1,27 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Bell, Check, CheckCheck } from "lucide-react";
+import { Bell, CheckCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useLocation } from "wouter";
-import { useToast } from "@/hooks/use-toast";
-import { playNotify, primeAudio } from "@/lib/sound";
 import type { Notification } from "@shared/schema";
 
+/**
+ * NotificationBell
+ *
+ * Responsible only for UI: unread badge, dropdown list, mark-as-read actions.
+ * The polling + toast + sound side-effects live in NotificationProvider.
+ */
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
   const [, navigate] = useLocation();
-  const { toast } = useToast();
-  const lastSeenIdRef = useRef<string | null>(null);
-  const initializedRef = useRef(false);
-
-  useEffect(() => {
-    function handlePrime() {
-      primeAudio();
-      document.removeEventListener("pointerdown", handlePrime);
-    }
-    document.addEventListener("pointerdown", handlePrime, { once: true });
-    return () => document.removeEventListener("pointerdown", handlePrime);
-  }, []);
 
   const { data: countData } = useQuery<{ count: number }>({
     queryKey: ["/api/notifications/unread-count"],
-    refetchInterval: 15000,
+    refetchInterval: 15_000,
   });
-
-  const { data: recentNotifications = [] } = useQuery<Notification[]>({
-    queryKey: ["/api/notifications", "polling"],
-    queryFn: async () => {
-      const res = await fetch("/api/notifications?limit=5", { credentials: "include" });
-      if (!res.ok) return [];
-      return res.json();
-    },
-    refetchInterval: 15000,
-  });
-
-  useEffect(() => {
-    if (recentNotifications.length === 0) return;
-
-    const maxId = recentNotifications.reduce((max, n) =>
-      n.id > max ? n.id : max, recentNotifications[0].id
-    );
-
-    if (!initializedRef.current) {
-      lastSeenIdRef.current = maxId;
-      initializedRef.current = true;
-      return;
-    }
-
-    if (lastSeenIdRef.current !== null && maxId > lastSeenIdRef.current) {
-      const newNotifs = recentNotifications.filter(
-        (n) => lastSeenIdRef.current !== null && n.id > lastSeenIdRef.current
-      );
-
-      for (const notif of newNotifs) {
-        toast({
-          title: notif.title,
-          description: notif.message,
-        });
-      }
-
-      if (newNotifs.length > 0) {
-        playNotify();
-      }
-
-      lastSeenIdRef.current = maxId;
-    }
-  }, [recentNotifications, toast]);
 
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
     queryKey: ["/api/notifications"],
@@ -81,10 +29,13 @@ export function NotificationBell() {
   });
 
   const markReadMutation = useMutation({
-    mutationFn: (id: string) => apiRequest("POST", `/api/notifications/${id}/read`),
+    mutationFn: (id: string) =>
+      apiRequest("POST", `/api/notifications/${id}/read`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/notifications/unread-count"] });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/notifications/unread-count"],
+      });
     },
   });
 
@@ -92,26 +43,29 @@ export function NotificationBell() {
     mutationFn: () => apiRequest("POST", "/api/notifications/read-all"),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/notifications/unread-count"] });
+      queryClient.invalidateQueries({
+        queryKey: ["/api/notifications/unread-count"],
+      });
     },
   });
 
+  // Close dropdown when clicking outside
   useEffect(() => {
+    if (!open) return;
     function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      const dropdown = document.getElementById("notification-dropdown");
+      if (dropdown && !dropdown.contains(e.target as Node)) {
         setOpen(false);
       }
     }
-    if (open) document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [open]);
 
   const unreadCount = countData?.count ?? 0;
 
   function handleNotificationClick(notif: Notification) {
-    if (!notif.isRead) {
-      markReadMutation.mutate(notif.id);
-    }
+    if (!notif.isRead) markReadMutation.mutate(notif.id);
     if (notif.linkUrl) {
       navigate(notif.linkUrl);
       setOpen(false);
@@ -119,25 +73,22 @@ export function NotificationBell() {
   }
 
   function formatTime(dateStr: string) {
-    const d = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - d.getTime();
-    const diffMin = Math.floor(diffMs / 60000);
+    const diffMs = Date.now() - new Date(dateStr).getTime();
+    const diffMin = Math.floor(diffMs / 60_000);
     if (diffMin < 1) return "agora";
     if (diffMin < 60) return `${diffMin}min`;
     const diffH = Math.floor(diffMin / 60);
     if (diffH < 24) return `${diffH}h`;
-    const diffD = Math.floor(diffH / 24);
-    return `${diffD}d`;
+    return `${Math.floor(diffH / 24)}d`;
   }
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative" id="notification-dropdown">
       <Button
         variant="ghost"
         size="icon"
         className="relative"
-        onClick={() => setOpen(!open)}
+        onClick={() => setOpen((v) => !v)}
         data-testid="button-notification-bell"
       >
         <Bell className="h-5 w-5" />
@@ -153,7 +104,10 @@ export function NotificationBell() {
       </Button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-80 rounded-lg border bg-popover shadow-lg z-50" data-testid="dropdown-notifications">
+        <div
+          className="absolute right-0 top-full mt-2 w-80 rounded-lg border bg-popover shadow-lg z-50"
+          data-testid="dropdown-notifications"
+        >
           <div className="flex items-center justify-between p-3 border-b">
             <span className="font-semibold text-sm">Notificações</span>
             {unreadCount > 0 && (
@@ -173,20 +127,30 @@ export function NotificationBell() {
 
           <ScrollArea className="max-h-80">
             {isLoading ? (
-              <div className="p-4 text-center text-sm text-muted-foreground">Carregando...</div>
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                Carregando...
+              </div>
             ) : notifications.length === 0 ? (
-              <div className="p-4 text-center text-sm text-muted-foreground">Nenhuma notificação</div>
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                Nenhuma notificação
+              </div>
             ) : (
               <div className="divide-y">
                 {notifications.map((notif) => (
                   <button
                     key={notif.id}
-                    className={`w-full text-left p-3 hover:bg-muted/50 transition-colors flex gap-3 items-start ${!notif.isRead ? "bg-primary/5" : ""}`}
+                    className={`w-full text-left p-3 hover:bg-muted/50 transition-colors flex gap-3 items-start ${
+                      !notif.isRead ? "bg-primary/5" : ""
+                    }`}
                     onClick={() => handleNotificationClick(notif)}
                     data-testid={`notification-item-${notif.id}`}
                   >
                     <div className="flex-1 min-w-0">
-                      <p className={`text-sm leading-tight ${!notif.isRead ? "font-semibold" : ""}`}>
+                      <p
+                        className={`text-sm leading-tight ${
+                          !notif.isRead ? "font-semibold" : ""
+                        }`}
+                      >
                         {notif.title}
                       </p>
                       <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">

@@ -72,7 +72,6 @@ export function NotificationProvider() {
 
     if (newOnes.length > 0) {
       playNotify();
-      console.log("[Notify] playNotify()", newOnes.length);
     }
   }, [recent, toast]);
 

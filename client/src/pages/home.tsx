@@ -64,10 +64,13 @@ export default function Home() {
     enabled: user?.isAdmin === true,
   });
 
-  const { data: alerts = [] } = useQuery<AlertItem[]>({
+  const { data: alertsRaw } = useQuery<AlertItem[] | { error: string }>({
     queryKey: ["/api/alerts?active=true"],
-    queryFn: () => fetch("/api/alerts?active=true", { credentials: "include" }).then((r) => r.json()),
+    queryFn: () =>
+      fetch("/api/alerts?active=true", { credentials: "include" }).then((r) => r.json()),
+    retry: false,
   });
+  const alerts: AlertItem[] = Array.isArray(alertsRaw) ? alertsRaw : [];
 
   const toggleFavoriteMutation = useMutation({
     mutationFn: async ({ resourceId, isFavorite }: { resourceId: string; isFavorite: boolean }) => {
@@ -83,9 +86,10 @@ export default function Home() {
     },
   });
 
-  const favoriteResources = resources.filter((r) => r.isFavorite);
-  const resourcesDown = resources.filter((r) => r.healthStatus === "DOWN").length;
-  const resourcesDegraded = resources.filter((r) => r.healthStatus === "DEGRADED").length;
+  const safeResources = Array.isArray(resources) ? resources : [];
+  const favoriteResources = safeResources.filter((r) => r.isFavorite);
+  const resourcesDown = safeResources.filter((r) => r.healthStatus === "DOWN").length;
+  const resourcesDegraded = safeResources.filter((r) => r.healthStatus === "DEGRADED").length;
   const activeAlerts = alerts.filter((a) => !a.isRead);
   const criticalAlerts = activeAlerts.filter((a) => a.severity === "critical");
 
@@ -140,7 +144,7 @@ export default function Home() {
             </div>
             <div>
               <p className="text-xl font-semibold">
-                {resources.filter((r) => r.type === "APP").length}
+                {safeResources.filter((r) => r.type === "APP").length}
               </p>
               <p className="text-xs text-muted-foreground">Aplicações</p>
             </div>
@@ -157,7 +161,7 @@ export default function Home() {
             </div>
             <div>
               <p className="text-xl font-semibold">
-                {resources.filter((r) => r.type === "DASHBOARD").length}
+                {safeResources.filter((r) => r.type === "DASHBOARD").length}
               </p>
               <p className="text-xs text-muted-foreground">Dashboards</p>
             </div>
@@ -198,7 +202,7 @@ export default function Home() {
                 <CheckCircle2 className="h-5 w-5 text-green-500" />
               </div>
               <div>
-                <p className="text-xl font-semibold">{resources.length}</p>
+                <p className="text-xl font-semibold">{safeResources.length}</p>
                 <p className="text-xs text-muted-foreground">Recursos OK</p>
               </div>
             </CardContent>

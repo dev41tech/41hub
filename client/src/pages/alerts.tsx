@@ -97,17 +97,21 @@ export default function Alerts() {
   });
 
   // User query (active alerts)
-  const { data: userAlerts = [], isLoading: userLoading } = useQuery<AlertItem[]>({
+  const { data: userAlertsRaw, isLoading: userLoading } = useQuery<AlertItem[] | unknown>({
     queryKey: ["/api/alerts"],
     queryFn: () =>
       fetch("/api/alerts?active=true", { credentials: "include" }).then((r) => r.json()),
+    retry: false,
   });
+  const userAlerts: AlertItem[] = Array.isArray(userAlertsRaw) ? userAlertsRaw : [];
 
   // Admin query (all alerts)
-  const { data: adminAlerts = [], isLoading: adminLoading } = useQuery<AlertItem[]>({
+  const { data: adminAlertsRaw, isLoading: adminLoading } = useQuery<AlertItem[] | unknown>({
     queryKey: ["/api/admin/alerts"],
     enabled: isAdmin === true,
+    retry: false,
   });
+  const adminAlerts: AlertItem[] = Array.isArray(adminAlertsRaw) ? adminAlertsRaw : [];
 
   const readMutation = useMutation({
     mutationFn: (id: string) => apiRequest("POST", `/api/alerts/${id}/read`),

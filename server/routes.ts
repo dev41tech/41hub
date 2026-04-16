@@ -191,6 +191,18 @@ function canCoordinatorManageSector(user: UserWithRoles, sectorId: string): bool
 }
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+  // ── Startup diagnostics log ──────────────────────────────────────────────
+  try {
+    const dbRes = await pool.query("SELECT current_database() AS db, version() AS ver");
+    const dbName = dbRes.rows[0]?.db ?? "unknown";
+    const rawUrl = process.env.DATABASE_URL ?? "";
+    // Strip password from URL before logging
+    const safeUrl = rawUrl.replace(/:\/\/[^:]+:[^@]+@/, "://<credentials>@");
+    console.info(`[startup] DB connected — database="${dbName}"  url="${safeUrl}"  pg="${dbRes.rows[0]?.ver?.split(" ")[1] ?? "?"}"`);
+  } catch (e) {
+    console.error("[startup] Failed to connect to DB:", e);
+  }
+
   // Session secret validation - required in production
   const sessionSecret = process.env.SESSION_SECRET;
   if (process.env.NODE_ENV === "production" && !sessionSecret) {
@@ -3012,7 +3024,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         [userId]
       );
       res.json(result.rows);
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.code === "42P01") {
+        // system_alerts table not yet created — graceful empty response
+        console.warn("[alerts] system_alerts table missing (42P01) — returning []");
+        return res.json([]);
+      }
       console.error("Error fetching alerts:", error);
       res.status(500).json({ error: "Failed to fetch alerts" });
     }
@@ -3048,8 +3065,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
          ORDER BY sa.created_at DESC`
       );
       res.json(result.rows);
-    } catch (error) {
-      console.error("Error fetching alerts:", error);
+    } catch (error: any) {
+      if (error?.code === "42P01") {
+        console.warn("[admin/alerts] system_alerts table missing (42P01) — returning []");
+        return res.json([]);
+      }
+      console.error("Error fetching admin alerts:", error);
       res.status(500).json({ error: "Failed to fetch alerts" });
     }
   });
@@ -3187,13 +3208,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           params
         ),
         pool.query(
-          `SELECT
-            COUNT(*) as total,
-            COUNT(*) FILTER (WHERE health_status_override = 'UP') as up,
-            COUNT(*) FILTER (WHERE health_status_override = 'DEGRADED') as degraded,
-            COUNT(*) FILTER (WHERE health_status_override = 'DOWN') as down
-           FROM resources WHERE is_active = true`
-        ),
+          `SELECT COUNT(*) as total, 0 as up, 0 as degraded, 0 as down FROM resources WHERE is_active = true`
+        ).catch(async (e: any) => {
+          // Fallback: also handle if health_status_override column is present
+          if (e?.code === "42703") {
+            return pool.query(`SELECT COUNT(*) as total, 0 as up, 0 as degraded, 0 as down FROM resources WHERE is_active = true`);
+          }
+          throw e;
+        }),
         pool.query(
           `SELECT COUNT(*) as totalSessions, ROUND(AVG(wpm)) as avgWpm,
                   ROUND(AVG(accuracy::numeric), 1) as avgAccuracy
@@ -3209,7 +3231,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         resources: resources.rows[0],
         typing: typing.rows[0],
       });
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.code === "42P01" || error?.code === "42703") {
+        console.warn("[analytics/stats] Schema not ready (" + error.code + "):", error.message);
+        return res.json({
+          tickets: { total: "0", open: "0", resolved: "0", cancelled: "0" },
+          byStatus: [],
+          byPriority: [],
+          topCategories: [],
+          resources: { total: "0", up: "0", degraded: "0", down: "0" },
+          typing: { totalSessions: "0", avgWpm: "0", avgAccuracy: "0" },
+        });
+      }
       console.error("Error fetching analytics:", error);
       res.status(500).json({ error: "Failed to fetch analytics" });
     }
@@ -3450,6 +3483,66 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Health check endpoint for backend
   app.get("/health", (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
+  });
+
+  // ── Schema diagnostics (read-only, admin only) ───────────────────────────
+  app.get("/api/admin/diagnostics/schema", requireAuth, requireAdmin, async (req, res) => {
+    const checks: Array<{ name: string; exists: boolean; detail?: string }> = [];
+
+    const tableExists = async (table: string): Promise<boolean> => {
+      const r = await pool.query(
+        `SELECT 1 FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name = $1 LIMIT 1`,
+        [table]
+      );
+      return r.rows.length > 0;
+    };
+
+    const columnExists = async (table: string, column: string): Promise<boolean> => {
+      const r = await pool.query(
+        `SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2 LIMIT 1`,
+        [table, column]
+      );
+      return r.rows.length > 0;
+    };
+
+    try {
+      const tables = [
+        "resources", "sectors", "users", "roles", "user_sector_roles",
+        "resource_overrides", "favorites", "recent_access", "audit_logs",
+        "health_checks", "tickets", "ticket_categories", "ticket_sla_policies",
+        "ticket_assignees", "ticket_comments", "ticket_attachments",
+        "ticket_sla_cycles", "ticket_events", "ticket_checklist_items",
+        "ticket_approvals", "ticket_alerts_dedup",
+        "notifications", "notification_settings",
+        "system_alerts", "system_alert_reads",
+        "api_tokens",
+        "kb_articles", "kb_article_views", "kb_article_feedback",
+        "typing_texts", "typing_sessions", "typing_scores",
+        "admin_settings",
+      ];
+
+      for (const t of tables) {
+        checks.push({ name: `table:${t}`, exists: await tableExists(t) });
+      }
+
+      // Key columns added in recent migrations
+      const cols = [
+        ["resources", "health_status_override"],
+        ["resources", "health_message"],
+        ["resources", "health_updated_at"],
+        ["resources", "health_updated_by"],
+      ];
+      for (const [tbl, col] of cols) {
+        checks.push({ name: `column:${tbl}.${col}`, exists: await columnExists(tbl, col) });
+      }
+
+      res.json({ ok: true, timestamp: new Date().toISOString(), checks });
+    } catch (err: any) {
+      console.error("[diagnostics/schema] error:", err);
+      res.status(500).json({ ok: false, error: err.message, checks });
+    }
   });
 
   return httpServer;

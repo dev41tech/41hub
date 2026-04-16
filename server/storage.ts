@@ -1,5 +1,5 @@
 import { eq, and, desc, sql, inArray, or, ilike, ne, asc } from "drizzle-orm";
-import { db } from "./db";
+import { db, pool } from "./db";
 import {
   users,
   sectors,
@@ -74,6 +74,58 @@ import {
   type TypingScore,
 } from "@shared/schema";
 import { computeSlaDueDates, addBusinessMinutes, businessMinutesBetween } from "./lib/sla";
+
+// ── Schema-mismatch resilience ─────────────────────────────────────────────
+// New Drizzle schema columns (health_status_override, health_message, etc.)
+// may not exist in the production database until migrations are applied.
+// Postgres returns error code 42703 ("column does not exist") or 42P01
+// ("relation does not exist") in that case. These helpers let us detect those
+// errors and fall back to raw SQL using only the pre-migration columns.
+
+function isPgSchemaMismatch(err: unknown): boolean {
+  if (err && typeof err === "object" && "code" in err) {
+    const code = (err as { code: string }).code;
+    return code === "42703" || code === "42P01";
+  }
+  return false;
+}
+
+/** Maps a raw pool.query row (snake_case) to ResourceWithHealth. */
+function mapRawResourceRow(
+  r: Record<string, any>,
+  isFavorite: boolean
+): ResourceWithHealth {
+  return {
+    id: r.id,
+    name: r.name,
+    type: r.type as "APP" | "DASHBOARD",
+    sectorId: r.sector_id ?? null,
+    icon: r.icon ?? "Layout",
+    tags: r.tags ?? [],
+    embedMode: (r.embed_mode ?? "LINK") as any,
+    openBehavior: (r.open_behavior ?? "BOTH") as any,
+    url: r.url ?? null,
+    metadata: r.metadata ?? {},
+    isActive: r.is_active,
+    createdAt: r.created_at,
+    // New columns not yet in prod DB — default to null
+    healthStatusOverride: null,
+    healthMessage: null,
+    healthUpdatedAt: null,
+    healthUpdatedBy: null,
+    sectorName: r.sector_name || undefined,
+    healthStatus: r.health_status as "UP" | "DEGRADED" | "DOWN" | undefined,
+    isFavorite,
+  };
+}
+
+const SAFE_RESOURCE_COLS = `
+  r.id, r.name, r.type, r.sector_id, r.icon, r.tags,
+  r.embed_mode, r.open_behavior, r.url, r.metadata,
+  r.is_active, r.created_at,
+  s.name  AS sector_name,
+  hc.status AS health_status
+`;
 
 export interface IStorage {
   // Users
@@ -449,17 +501,37 @@ export class DatabaseStorage implements IStorage {
 
     // If admin, return all active resources
     if (userWithRoles.isAdmin) {
-      const allResources = await db
-        .select({
-          resource: resources,
-          sectorName: sectors.name,
-          healthStatus: healthChecks.status,
-        })
-        .from(resources)
-        .leftJoin(sectors, eq(resources.sectorId, sectors.id))
-        .leftJoin(healthChecks, eq(resources.id, healthChecks.resourceId))
-        .where(eq(resources.isActive, true))
-        .orderBy(resources.name);
+      let allResources: Array<{ resource: Resource; sectorName: string | null; healthStatus: string | null }>;
+      try {
+        allResources = await db
+          .select({
+            resource: resources,
+            sectorName: sectors.name,
+            healthStatus: healthChecks.status,
+          })
+          .from(resources)
+          .leftJoin(sectors, eq(resources.sectorId, sectors.id))
+          .leftJoin(healthChecks, eq(resources.id, healthChecks.resourceId))
+          .where(eq(resources.isActive, true))
+          .orderBy(resources.name);
+      } catch (err) {
+        if (isPgSchemaMismatch(err)) {
+          console.warn("[storage] Schema mismatch in getResourcesForUser(admin), falling back to safe query:", (err as any).message);
+          const { rows } = await pool.query(
+            `SELECT ${SAFE_RESOURCE_COLS}
+             FROM resources r
+             LEFT JOIN sectors s ON r.sector_id = s.id
+             LEFT JOIN health_checks hc ON r.id = hc.resource_id
+             WHERE r.is_active = true ORDER BY r.name`
+          );
+          const favRows = await pool.query(
+            `SELECT resource_id FROM favorites WHERE user_id = $1`, [userId]
+          );
+          const favoriteIds = new Set<string>(favRows.rows.map((f: any) => f.resource_id));
+          return rows.map((r: any) => mapRawResourceRow(r, favoriteIds.has(r.id)));
+        }
+        throw err;
+      }
 
       const userFavorites = await db.select().from(favorites).where(eq(favorites.userId, userId));
       const favoriteIds = new Set(userFavorites.map((f) => f.resourceId));
@@ -477,17 +549,44 @@ export class DatabaseStorage implements IStorage {
     if (userSectorIds.length === 0) return [];
 
     // Get resources from user's sectors
-    const sectorResources = await db
-      .select({
-        resource: resources,
-        sectorName: sectors.name,
-        healthStatus: healthChecks.status,
-      })
-      .from(resources)
-      .leftJoin(sectors, eq(resources.sectorId, sectors.id))
-      .leftJoin(healthChecks, eq(resources.id, healthChecks.resourceId))
-      .where(and(eq(resources.isActive, true), inArray(resources.sectorId, userSectorIds)))
-      .orderBy(resources.name);
+    let sectorResources: Array<{ resource: Resource; sectorName: string | null; healthStatus: string | null }>;
+    try {
+      sectorResources = await db
+        .select({
+          resource: resources,
+          sectorName: sectors.name,
+          healthStatus: healthChecks.status,
+        })
+        .from(resources)
+        .leftJoin(sectors, eq(resources.sectorId, sectors.id))
+        .leftJoin(healthChecks, eq(resources.id, healthChecks.resourceId))
+        .where(and(eq(resources.isActive, true), inArray(resources.sectorId, userSectorIds)))
+        .orderBy(resources.name);
+    } catch (err) {
+      if (isPgSchemaMismatch(err)) {
+        console.warn("[storage] Schema mismatch in getResourcesForUser(user), falling back to safe query:", (err as any).message);
+        const placeholders = userSectorIds.map((_, i) => `$${i + 1}`).join(", ");
+        const { rows } = await pool.query(
+          `SELECT ${SAFE_RESOURCE_COLS}
+           FROM resources r
+           LEFT JOIN sectors s ON r.sector_id = s.id
+           LEFT JOIN health_checks hc ON r.id = hc.resource_id
+           WHERE r.is_active = true AND r.sector_id IN (${placeholders})
+           ORDER BY r.name`,
+          userSectorIds
+        );
+        const overrides = await this.getResourceOverridesForUser(userId);
+        const denySet = new Set(overrides.filter((o) => o.effect === "DENY").map((o) => o.resourceId));
+        const favRows = await pool.query(
+          `SELECT resource_id FROM favorites WHERE user_id = $1`, [userId]
+        );
+        const favoriteIds = new Set<string>(favRows.rows.map((f: any) => f.resource_id));
+        return rows
+          .filter((r: any) => !denySet.has(r.id))
+          .map((r: any) => mapRawResourceRow(r, favoriteIds.has(r.id)));
+      }
+      throw err;
+    }
 
     // Get overrides for user
     const overrides = await this.getResourceOverridesForUser(userId);
@@ -513,16 +612,43 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getResourceWithHealth(id: string, userId?: string): Promise<ResourceWithHealth | undefined> {
-    const [result] = await db
-      .select({
-        resource: resources,
-        sectorName: sectors.name,
-        healthStatus: healthChecks.status,
-      })
-      .from(resources)
-      .leftJoin(sectors, eq(resources.sectorId, sectors.id))
-      .leftJoin(healthChecks, eq(resources.id, healthChecks.resourceId))
-      .where(eq(resources.id, id));
+    let result: { resource: Resource; sectorName: string | null; healthStatus: string | null } | undefined;
+    try {
+      const [row] = await db
+        .select({
+          resource: resources,
+          sectorName: sectors.name,
+          healthStatus: healthChecks.status,
+        })
+        .from(resources)
+        .leftJoin(sectors, eq(resources.sectorId, sectors.id))
+        .leftJoin(healthChecks, eq(resources.id, healthChecks.resourceId))
+        .where(eq(resources.id, id));
+      result = row;
+    } catch (err) {
+      if (isPgSchemaMismatch(err)) {
+        console.warn("[storage] Schema mismatch in getResourceWithHealth, falling back to safe query:", (err as any).message);
+        const { rows } = await pool.query(
+          `SELECT ${SAFE_RESOURCE_COLS}
+           FROM resources r
+           LEFT JOIN sectors s ON r.sector_id = s.id
+           LEFT JOIN health_checks hc ON r.id = hc.resource_id
+           WHERE r.id = $1`,
+          [id]
+        );
+        if (rows.length === 0) return undefined;
+        let isFav = false;
+        if (userId) {
+          const favCheck = await pool.query(
+            `SELECT id FROM favorites WHERE user_id = $1 AND resource_id = $2 LIMIT 1`,
+            [userId, id]
+          );
+          isFav = favCheck.rows.length > 0;
+        }
+        return mapRawResourceRow(rows[0], isFav);
+      }
+      throw err;
+    }
 
     if (!result) return undefined;
 
@@ -594,25 +720,43 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUserFavorites(userId: string): Promise<ResourceWithHealth[]> {
-    const favs = await db
-      .select({
-        resource: resources,
-        sectorName: sectors.name,
-        healthStatus: healthChecks.status,
-      })
-      .from(favorites)
-      .innerJoin(resources, eq(favorites.resourceId, resources.id))
-      .leftJoin(sectors, eq(resources.sectorId, sectors.id))
-      .leftJoin(healthChecks, eq(resources.id, healthChecks.resourceId))
-      .where(and(eq(favorites.userId, userId), eq(resources.isActive, true)))
-      .orderBy(favorites.sortOrder);
+    try {
+      const favs = await db
+        .select({
+          resource: resources,
+          sectorName: sectors.name,
+          healthStatus: healthChecks.status,
+        })
+        .from(favorites)
+        .innerJoin(resources, eq(favorites.resourceId, resources.id))
+        .leftJoin(sectors, eq(resources.sectorId, sectors.id))
+        .leftJoin(healthChecks, eq(resources.id, healthChecks.resourceId))
+        .where(and(eq(favorites.userId, userId), eq(resources.isActive, true)))
+        .orderBy(favorites.sortOrder);
 
-    return favs.map((f) => ({
-      ...f.resource,
-      sectorName: f.sectorName || undefined,
-      healthStatus: f.healthStatus as "UP" | "DEGRADED" | "DOWN" | undefined,
-      isFavorite: true,
-    }));
+      return favs.map((f) => ({
+        ...f.resource,
+        sectorName: f.sectorName || undefined,
+        healthStatus: f.healthStatus as "UP" | "DEGRADED" | "DOWN" | undefined,
+        isFavorite: true,
+      }));
+    } catch (err) {
+      if (isPgSchemaMismatch(err)) {
+        console.warn("[storage] Schema mismatch in getUserFavorites, falling back to safe query:", (err as any).message);
+        const { rows } = await pool.query(
+          `SELECT ${SAFE_RESOURCE_COLS}
+           FROM favorites f
+           INNER JOIN resources r ON f.resource_id = r.id
+           LEFT JOIN sectors s ON r.sector_id = s.id
+           LEFT JOIN health_checks hc ON r.id = hc.resource_id
+           WHERE f.user_id = $1 AND r.is_active = true
+           ORDER BY f.sort_order`,
+          [userId]
+        );
+        return rows.map((r: any) => mapRawResourceRow(r, true));
+      }
+      throw err;
+    }
   }
 
   // Recent Access
@@ -633,29 +777,52 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getRecentAccess(userId: string, limit: number = 5): Promise<ResourceWithHealth[]> {
-    const recent = await db
-      .select({
-        resource: resources,
-        sectorName: sectors.name,
-        healthStatus: healthChecks.status,
-      })
-      .from(recentAccess)
-      .innerJoin(resources, eq(recentAccess.resourceId, resources.id))
-      .leftJoin(sectors, eq(resources.sectorId, sectors.id))
-      .leftJoin(healthChecks, eq(resources.id, healthChecks.resourceId))
-      .where(and(eq(recentAccess.userId, userId), eq(resources.isActive, true)))
-      .orderBy(desc(recentAccess.lastAccessAt))
-      .limit(limit);
+    try {
+      const recent = await db
+        .select({
+          resource: resources,
+          sectorName: sectors.name,
+          healthStatus: healthChecks.status,
+        })
+        .from(recentAccess)
+        .innerJoin(resources, eq(recentAccess.resourceId, resources.id))
+        .leftJoin(sectors, eq(resources.sectorId, sectors.id))
+        .leftJoin(healthChecks, eq(resources.id, healthChecks.resourceId))
+        .where(and(eq(recentAccess.userId, userId), eq(resources.isActive, true)))
+        .orderBy(desc(recentAccess.lastAccessAt))
+        .limit(limit);
 
-    const userFavorites = await db.select().from(favorites).where(eq(favorites.userId, userId));
-    const favoriteIds = new Set(userFavorites.map((f) => f.resourceId));
+      const userFavorites = await db.select().from(favorites).where(eq(favorites.userId, userId));
+      const favoriteIds = new Set(userFavorites.map((f) => f.resourceId));
 
-    return recent.map((r) => ({
-      ...r.resource,
-      sectorName: r.sectorName || undefined,
-      healthStatus: r.healthStatus as "UP" | "DEGRADED" | "DOWN" | undefined,
-      isFavorite: favoriteIds.has(r.resource.id),
-    }));
+      return recent.map((r) => ({
+        ...r.resource,
+        sectorName: r.sectorName || undefined,
+        healthStatus: r.healthStatus as "UP" | "DEGRADED" | "DOWN" | undefined,
+        isFavorite: favoriteIds.has(r.resource.id),
+      }));
+    } catch (err) {
+      if (isPgSchemaMismatch(err)) {
+        console.warn("[storage] Schema mismatch in getRecentAccess, falling back to safe query:", (err as any).message);
+        const { rows } = await pool.query(
+          `SELECT ${SAFE_RESOURCE_COLS}
+           FROM recent_access ra
+           INNER JOIN resources r ON ra.resource_id = r.id
+           LEFT JOIN sectors s ON r.sector_id = s.id
+           LEFT JOIN health_checks hc ON r.id = hc.resource_id
+           WHERE ra.user_id = $1 AND r.is_active = true
+           ORDER BY ra.last_access_at DESC
+           LIMIT $2`,
+          [userId, limit]
+        );
+        const favRows = await pool.query(
+          `SELECT resource_id FROM favorites WHERE user_id = $1`, [userId]
+        );
+        const favoriteIds = new Set<string>(favRows.rows.map((f: any) => f.resource_id));
+        return rows.map((r: any) => mapRawResourceRow(r, favoriteIds.has(r.id)));
+      }
+      throw err;
+    }
   }
 
   // Audit Logs

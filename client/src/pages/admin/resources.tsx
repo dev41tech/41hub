@@ -87,9 +87,11 @@ export default function AdminResources() {
   const [deletingResource, setDeletingResource] = useState<Resource | null>(null);
   const [formData, setFormData] = useState<ResourceFormData>(defaultFormData);
 
-  const { data: resources = [], isLoading } = useQuery<Resource[]>({
+  const { data: resourcesRaw, isLoading } = useQuery<Resource[] | unknown>({
     queryKey: ["/api/admin/resources"],
+    retry: false,
   });
+  const resources: Resource[] = Array.isArray(resourcesRaw) ? resourcesRaw : [];
 
   const { data: sectors = [] } = useQuery<Sector[]>({
     queryKey: ["/api/admin/sectors"],

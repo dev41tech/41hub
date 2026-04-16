@@ -82,6 +82,87 @@ function CodeBlock({ code }: { code: string }) {
   );
 }
 
+const METHOD_COLORS: Record<string, string> = {
+  GET: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+  POST: "bg-green-500/15 text-green-600 dark:text-green-400",
+  PATCH: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  PUT: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  DELETE: "bg-red-500/15 text-red-600 dark:text-red-400",
+};
+
+function EndpointRow({
+  method,
+  path,
+  desc,
+  scope,
+  queryParams,
+  body,
+  response,
+}: {
+  method: string;
+  path: string;
+  desc: string;
+  scope: "read" | "write";
+  queryParams?: string;
+  body?: string;
+  response?: string;
+}) {
+  return (
+    <div className="space-y-1.5 py-2 border-b last:border-0">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span
+          className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-mono font-semibold ${METHOD_COLORS[method] ?? ""}`}
+        >
+          {method}
+        </span>
+        <code className="text-xs font-mono text-foreground flex-1 min-w-0 break-all">{path}</code>
+        <Badge variant={scope === "write" ? "default" : "secondary"} className="text-xs shrink-0">
+          {scope}
+        </Badge>
+      </div>
+      <p className="text-xs text-muted-foreground">{desc}</p>
+      {queryParams && (
+        <p className="text-xs text-muted-foreground">
+          <span className="font-medium">Query params:</span> {queryParams}
+        </p>
+      )}
+      {body && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted-foreground font-medium">Body (JSON)</summary>
+          <pre className="mt-1 rounded bg-muted p-2 text-xs font-mono whitespace-pre-wrap break-all">{body}</pre>
+        </details>
+      )}
+      {response && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted-foreground font-medium">Resposta (exemplo)</summary>
+          <pre className="mt-1 rounded bg-muted p-2 text-xs font-mono whitespace-pre-wrap break-all">{response}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function EndpointGroup({
+  title,
+  color,
+  children,
+}: {
+  title: string;
+  color: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className={`text-sm flex items-center gap-2 ${color}`}>
+          <span>{title}</span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="divide-y p-0 px-4">{children}</CardContent>
+    </Card>
+  );
+}
+
 export default function AdminIntegrations() {
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
@@ -280,96 +361,174 @@ export default function AdminIntegrations() {
 
         {/* ===== DOCS TAB ===== */}
         <TabsContent value="docs" className="space-y-6 mt-4">
+          {/* Base URL + Auth */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Globe className="h-4 w-4" />
+                  Base URL
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 rounded bg-muted px-3 py-2 text-sm font-mono break-all">
+                    {BASE_URL}
+                  </code>
+                  <CopyButton text={BASE_URL} />
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Autenticação</CardTitle>
+                <CardDescription>Header obrigatório em todas as requisições</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <CodeBlock code={`Authorization: Bearer hub_<token>`} />
+                <div className="flex gap-2 text-xs">
+                  <Badge variant="secondary">read</Badge>
+                  <span className="text-muted-foreground">somente leitura</span>
+                  <Badge variant="secondary" className="ml-2">write</Badge>
+                  <span className="text-muted-foreground">leitura e escrita</span>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Resources */}
+          <EndpointGroup title="Recursos (Resources)" color="bg-blue-500/10 text-blue-500">
+            <EndpointRow method="GET" path="/api/resources" desc="Lista recursos visíveis ao usuário autenticado" scope="read"
+              response={`[{ "id": "uuid", "name": "App X", "type": "APP", "url": "https://...", "healthStatus": "UP", "tags": [] }]`} />
+            <EndpointRow method="GET" path="/api/admin/resources" desc="Lista todos os recursos (admin)" scope="read"
+              response={`[{ "id": "uuid", "name": "App X", "type": "APP|DASHBOARD", "isActive": true }]`} />
+            <EndpointRow method="POST" path="/api/admin/resources" desc="Cria recurso" scope="write"
+              body={`{ "name": "string", "type": "APP|DASHBOARD", "url": "string", "sectorId": "uuid", "embedMode": "LINK|IFRAME|POWERBI" }`} />
+            <EndpointRow method="PATCH" path="/api/admin/resources/:id" desc="Atualiza recurso" scope="write"
+              body={`{ "name": "string", "isActive": true }`} />
+            <EndpointRow method="DELETE" path="/api/admin/resources/:id" desc="Remove recurso" scope="write" />
+          </EndpointGroup>
+
+          {/* Tickets */}
+          <EndpointGroup title="Chamados (Tickets)" color="bg-amber-500/10 text-amber-500">
+            <EndpointRow method="GET" path="/api/tickets" desc="Lista chamados do usuário (abertos e históricos)" scope="read"
+              queryParams="status, priority, from, to"
+              response={`[{ "id": "uuid", "title": "string", "status": "ABERTO|EM_ANDAMENTO|RESOLVIDO|CANCELADO", "priority": "BAIXA|MEDIA|ALTA|URGENTE" }]`} />
+            <EndpointRow method="GET" path="/api/tickets/:id" desc="Detalhe de um chamado" scope="read" />
+            <EndpointRow method="POST" path="/api/tickets" desc="Abre novo chamado" scope="write"
+              body={`{ "title": "string", "description": "string", "categoryId": "uuid", "priority": "MEDIA" }`} />
+            <EndpointRow method="PATCH" path="/api/tickets/:id" desc="Atualiza status / prioridade (assignee ou admin)" scope="write"
+              body={`{ "status": "EM_ANDAMENTO", "priority": "ALTA" }`} />
+          </EndpointGroup>
+
+          {/* Ticket Comments */}
+          <EndpointGroup title="Comentários de Chamado" color="bg-purple-500/10 text-purple-500">
+            <EndpointRow method="GET" path="/api/tickets/:id/comments" desc="Lista comentários do chamado" scope="read" />
+            <EndpointRow method="POST" path="/api/tickets/:id/comments" desc="Adiciona comentário" scope="write"
+              body={`{ "body": "string", "isInternal": false }`} />
+          </EndpointGroup>
+
+          {/* Ticket Categories */}
+          <EndpointGroup title="Categorias de Chamado" color="bg-green-500/10 text-green-500">
+            <EndpointRow method="GET" path="/api/tickets/categories" desc="Árvore de categorias (branch → serviço)" scope="read"
+              response={`[{ "id": "uuid", "name": "string", "branch": "string", "parentId": null }]`} />
+          </EndpointGroup>
+
+          {/* Alerts */}
+          <EndpointGroup title="Alertas (System Alerts)" color="bg-red-500/10 text-red-500">
+            <EndpointRow method="GET" path="/api/alerts" desc="Alertas ativos para o usuário (inclui isRead)" scope="read"
+              queryParams="active=true|false"
+              response={`[{ "id": "uuid", "title": "string", "message": "string", "severity": "info|warning|critical", "isRead": false }]`} />
+            <EndpointRow method="POST" path="/api/alerts/:id/read" desc="Marca alerta como lido" scope="write" />
+            <EndpointRow method="POST" path="/api/admin/alerts" desc="Cria alerta (admin)" scope="write"
+              body={`{ "title": "string", "message": "string", "severity": "info|warning|critical", "isActive": true }`} />
+            <EndpointRow method="PATCH" path="/api/admin/alerts/:id" desc="Atualiza alerta (admin)" scope="write" />
+            <EndpointRow method="DELETE" path="/api/admin/alerts/:id" desc="Remove alerta (admin)" scope="write" />
+          </EndpointGroup>
+
+          {/* Notifications */}
+          <EndpointGroup title="Notificações" color="bg-sky-500/10 text-sky-500">
+            <EndpointRow method="GET" path="/api/notifications" desc="Lista notificações do usuário" scope="read"
+              response={`[{ "id": "uuid", "type": "alert|ticket|...", "title": "string", "isRead": false }]`} />
+            <EndpointRow method="POST" path="/api/notifications/:id/read" desc="Marca notificação como lida" scope="write" />
+            <EndpointRow method="POST" path="/api/notifications/read-all" desc="Marca todas como lidas" scope="write" />
+          </EndpointGroup>
+
+          {/* KB Articles */}
+          <EndpointGroup title="Base de Conhecimento (KB)" color="bg-chart-1/10 text-chart-1">
+            <EndpointRow method="GET" path="/api/kb" desc="Lista artigos publicados" scope="read"
+              queryParams="q (busca), categoryId, tags"
+              response={`[{ "id": "uuid", "title": "string", "body": "markdown", "categoryName": "string", "viewCount": 0 }]`} />
+            <EndpointRow method="GET" path="/api/kb/:id" desc="Artigo completo (registra visualização)" scope="read" />
+            <EndpointRow method="POST" path="/api/kb/:id/feedback" desc="Envia feedback de utilidade" scope="write"
+              body={`{ "helpful": true }`} />
+            <EndpointRow method="GET" path="/api/admin/kb" desc="Lista todos (admin, inclui rascunhos)" scope="read" />
+            <EndpointRow method="POST" path="/api/admin/kb" desc="Cria artigo (admin)" scope="write"
+              body={`{ "title": "string", "body": "markdown", "categoryId": "uuid", "isPublished": true }`} />
+            <EndpointRow method="PATCH" path="/api/admin/kb/:id" desc="Atualiza artigo (admin)" scope="write" />
+            <EndpointRow method="DELETE" path="/api/admin/kb/:id" desc="Remove artigo (admin)" scope="write" />
+          </EndpointGroup>
+
+          {/* Audit Logs */}
+          <EndpointGroup title="Logs de Auditoria" color="bg-slate-500/10 text-slate-500">
+            <EndpointRow method="GET" path="/api/admin/audit" desc="Lista logs de auditoria (admin)" scope="read"
+              queryParams="limit, page, from, to"
+              response={`[{ "id": "uuid", "action": "resource_create", "actorName": "string", "targetType": "string", "targetId": "uuid", "ip": "string" }]`} />
+          </EndpointGroup>
+
+          {/* Reports */}
+          <EndpointGroup title="Relatórios (Reports)" color="bg-emerald-500/10 text-emerald-500">
+            <EndpointRow method="GET" path="/api/admin/reports/tickets" desc="Exporta chamados (admin)" scope="read"
+              queryParams="format=csv|json, from=YYYY-MM-DD, to=YYYY-MM-DD" />
+            <EndpointRow method="GET" path="/api/admin/reports/resources" desc="Exporta recursos (admin)" scope="read"
+              queryParams="format=csv|json, includeInactive=true" />
+            <EndpointRow method="GET" path="/api/admin/reports/users" desc="Exporta usuários (admin)" scope="read"
+              queryParams="format=csv|json" />
+            <EndpointRow method="GET" path="/api/admin/reports/typing" desc="Exporta sessões de digitação (admin)" scope="read"
+              queryParams="format=csv|json" />
+          </EndpointGroup>
+
+          {/* Error codes */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Globe className="h-4 w-4" />
-                Base URL
-              </CardTitle>
+              <CardTitle className="text-sm">Códigos de Erro</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 rounded bg-muted px-3 py-2 text-sm font-mono break-all">
-                  {BASE_URL}
-                </code>
-                <CopyButton text={BASE_URL} />
+              <div className="space-y-1.5 text-xs">
+                {[
+                  ["400", "Bad Request", "Dados inválidos no body/query"],
+                  ["401", "Unauthorized", "Token ausente ou inválido"],
+                  ["403", "Forbidden", "Escopo insuficiente (read vs write) ou não é admin"],
+                  ["404", "Not Found", "Recurso não encontrado"],
+                  ["503", "Service Unavailable", "Tabela/coluna ausente no banco — execute as migrations"],
+                  ["500", "Internal Server Error", "Erro inesperado no servidor"],
+                ].map(([code, label, desc]) => (
+                  <div key={code} className="flex items-start gap-3">
+                    <Badge variant={code === "500" || code === "503" ? "destructive" : "outline"} className="shrink-0 font-mono">
+                      {code}
+                    </Badge>
+                    <span className="font-medium">{label}</span>
+                    <span className="text-muted-foreground">{desc}</span>
+                  </div>
+                ))}
               </div>
             </CardContent>
           </Card>
 
+          {/* Webhook payload */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Autenticação</CardTitle>
+              <CardTitle className="text-sm">Webhooks</CardTitle>
               <CardDescription>
-                Use o token no header Authorization em todas as requisições.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <CodeBlock code={`Authorization: Bearer hub_<seu_token>`} />
-              <p className="text-xs text-muted-foreground">
-                Tokens com escopo <code className="bg-muted px-1 rounded">read</code> permitem
-                apenas leitura. Tokens com{" "}
-                <code className="bg-muted px-1 rounded">write</code> permitem criação e edição.
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Exemplos de requisições</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <p className="text-xs font-medium text-muted-foreground mb-2">
-                  Listar recursos ativos
-                </p>
-                <CodeBlock
-                  code={`curl -s "${BASE_URL}/resources" \\
-  -H "Authorization: Bearer hub_<token>"`}
-                />
-              </div>
-              <div>
-                <p className="text-xs font-medium text-muted-foreground mb-2">
-                  Listar chamados
-                </p>
-                <CodeBlock
-                  code={`curl -s "${BASE_URL}/tickets" \\
-  -H "Authorization: Bearer hub_<token>"`}
-                />
-              </div>
-              <div>
-                <p className="text-xs font-medium text-muted-foreground mb-2">
-                  Alertas ativos
-                </p>
-                <CodeBlock
-                  code={`curl -s "${BASE_URL}/alerts?active=true" \\
-  -H "Authorization: Bearer hub_<token>"`}
-                />
-              </div>
-              <div>
-                <p className="text-xs font-medium text-muted-foreground mb-2">
-                  Exportar chamados (CSV)
-                </p>
-                <CodeBlock
-                  code={`curl -s "${BASE_URL}/admin/reports/tickets?format=csv&from=2026-01-01" \\
-  -H "Authorization: Bearer hub_<token>" \\
-  -o tickets.csv`}
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Webhooks de eventos</CardTitle>
-              <CardDescription>
-                Configure webhooks em Admin → Configurações para receber eventos em tempo real
-                (ticket_created, ticket_updated, resource_updated, alert_created, etc).
+                Configure em Admin → Config. Chamados → Integrações para receber eventos em tempo real.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <CodeBlock
-                code={`// Payload de exemplo (ticket_created)
+                code={`POST <sua_url>  HTTP/1.1
+Content-Type: application/json
+X-Hub-Event: ticket_created
+
 {
   "event": "ticket_created",
   "timestamp": "2026-04-16T14:00:00.000Z",

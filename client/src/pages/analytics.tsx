@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   LineChart,
   Ticket,
-  Users,
   Activity,
   BarChart2,
   CheckCircle2,
@@ -20,19 +19,9 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import type { AuditLog } from "@shared/schema";
 
 interface AnalyticsStats {
   tickets: {
@@ -55,11 +44,6 @@ interface AnalyticsStats {
     avgWpm: string | null;
     avgAccuracy: string | null;
   };
-}
-
-interface AuditLogWithActor extends AuditLog {
-  actorName?: string;
-  actorEmail?: string;
 }
 
 const statusLabels: Record<string, string> = {
@@ -123,21 +107,12 @@ function MetricCard({
 export default function Analytics() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [auditFrom, setAuditFrom] = useState("");
-  const [auditTo, setAuditTo] = useState("");
-  const [auditPage, setAuditPage] = useState(1);
 
   const statsUrl = `/api/admin/analytics/stats${from || to ? `?${from ? `from=${from}` : ""}${from && to ? "&" : ""}${to ? `to=${to}` : ""}` : ""}`;
 
   const { data: stats, isLoading: statsLoading } = useQuery<AnalyticsStats>({
     queryKey: [statsUrl],
     queryFn: () => fetch(statsUrl, { credentials: "include" }).then((r) => r.json()),
-  });
-
-  const auditUrl = `/api/admin/audit?limit=50&page=${auditPage}${auditFrom ? `&from=${auditFrom}` : ""}${auditTo ? `&to=${auditTo}` : ""}`;
-  const { data: auditLogs = [], isLoading: auditLoading } = useQuery<AuditLogWithActor[]>({
-    queryKey: [auditUrl],
-    queryFn: () => fetch(auditUrl, { credentials: "include" }).then((r) => r.json()),
   });
 
   return (
@@ -149,60 +124,47 @@ export default function Analytics() {
         <div>
           <h1 className="text-xl font-semibold">Analytics</h1>
           <p className="text-sm text-muted-foreground">
-            Métricas, logs e painel de TI do portal
+            Métricas e painel de TI do portal
           </p>
         </div>
       </div>
 
-      <Tabs defaultValue="metrics">
-        <TabsList>
-          <TabsTrigger value="metrics">
-            <BarChart2 className="h-4 w-4 mr-2" />
-            Métricas
-          </TabsTrigger>
-          <TabsTrigger value="audit">
-            <Activity className="h-4 w-4 mr-2" />
-            Auditoria
-          </TabsTrigger>
-        </TabsList>
-
-        {/* ===== METRICS TAB ===== */}
-        <TabsContent value="metrics" className="space-y-6 mt-4">
-          {/* Date filter */}
-          <Card>
-            <CardContent className="flex flex-wrap items-end gap-4 p-4">
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">De</Label>
-                <Input
-                  type="date"
-                  value={from}
-                  onChange={(e) => setFrom(e.target.value)}
-                  className="w-40"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Até</Label>
-                <Input
-                  type="date"
-                  value={to}
-                  onChange={(e) => setTo(e.target.value)}
-                  className="w-40"
-                />
-              </div>
-              {(from || to) && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setFrom("");
-                    setTo("");
-                  }}
-                >
-                  Limpar filtro
-                </Button>
-              )}
-            </CardContent>
-          </Card>
+      <div className="space-y-6">
+        {/* Date filter */}
+        <Card>
+          <CardContent className="flex flex-wrap items-end gap-4 p-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">De</Label>
+              <Input
+                type="date"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+                className="w-40 [color-scheme:light] dark:[color-scheme:dark]"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">Até</Label>
+              <Input
+                type="date"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                className="w-40 [color-scheme:light] dark:[color-scheme:dark]"
+              />
+            </div>
+            {(from || to) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setFrom("");
+                  setTo("");
+                }}
+              >
+                Limpar filtro
+              </Button>
+            )}
+          </CardContent>
+        </Card>
 
           {/* Ticket metrics */}
           <div>
@@ -388,129 +350,8 @@ export default function Analytics() {
               </CardContent>
             </Card>
           </div>
-        </TabsContent>
-
-        {/* ===== AUDIT TAB ===== */}
-        <TabsContent value="audit" className="space-y-4 mt-4">
-          <Card>
-            <CardContent className="flex flex-wrap items-end gap-4 p-4">
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">De</Label>
-                <Input
-                  type="date"
-                  value={auditFrom}
-                  onChange={(e) => { setAuditFrom(e.target.value); setAuditPage(1); }}
-                  className="w-40"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Até</Label>
-                <Input
-                  type="date"
-                  value={auditTo}
-                  onChange={(e) => { setAuditTo(e.target.value); setAuditPage(1); }}
-                  className="w-40"
-                />
-              </div>
-              {(auditFrom || auditTo) && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => { setAuditFrom(""); setAuditTo(""); setAuditPage(1); }}
-                >
-                  Limpar
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-0">
-              {auditLoading ? (
-                <div className="p-4 space-y-3">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <Skeleton key={i} className="h-10 w-full" />
-                  ))}
-                </div>
-              ) : auditLogs.length === 0 ? (
-                <div className="py-12 text-center text-muted-foreground text-sm">
-                  Nenhum log encontrado para o período selecionado
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Data/Hora</TableHead>
-                        <TableHead>Usuário</TableHead>
-                        <TableHead>Ação</TableHead>
-                        <TableHead>Alvo</TableHead>
-                        <TableHead>IP</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {auditLogs.map((log) => (
-                        <TableRow key={log.id}>
-                          <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                            {new Intl.DateTimeFormat("pt-BR", {
-                              dateStyle: "short",
-                              timeStyle: "short",
-                            }).format(new Date(log.createdAt))}
-                          </TableCell>
-                          <TableCell>
-                            <p className="text-sm font-medium">
-                              {(log as any).actorName || "Sistema"}
-                            </p>
-                            {(log as any).actorEmail && (
-                              <p className="text-xs text-muted-foreground">
-                                {(log as any).actorEmail}
-                              </p>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="text-xs font-mono">
-                              {log.action}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {log.targetType && log.targetId
-                              ? `${log.targetType}: ${log.targetId.slice(0, 8)}…`
-                              : "—"}
-                          </TableCell>
-                          <TableCell className="text-xs font-mono text-muted-foreground">
-                            {log.ip || "—"}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Pagination */}
-          <div className="flex items-center justify-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={auditPage <= 1}
-              onClick={() => setAuditPage((p) => Math.max(1, p - 1))}
-            >
-              Anterior
-            </Button>
-            <span className="text-sm text-muted-foreground">Página {auditPage}</span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={auditLogs.length < 50}
-              onClick={() => setAuditPage((p) => p + 1)}
-            >
-              Próxima
-            </Button>
-          </div>
-        </TabsContent>
-      </Tabs>
+        </div>
     </div>
   );
 }
+

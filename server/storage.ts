@@ -492,7 +492,38 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllResources(): Promise<Resource[]> {
-    return db.select().from(resources).orderBy(resources.name);
+    try {
+      return await db.select().from(resources).orderBy(resources.name);
+    } catch (err) {
+      if (isPgSchemaMismatch(err)) {
+        console.warn("[storage] Schema mismatch in getAllResources, falling back to safe query:", (err as any).message);
+        const { rows } = await pool.query(
+          `SELECT r.id, r.name, r.type, r.sector_id, r.icon, r.tags,
+                  r.embed_mode, r.open_behavior, r.url, r.metadata,
+                  r.is_active, r.created_at
+           FROM resources r ORDER BY r.name`
+        );
+        return rows.map((r: any) => ({
+          id: r.id,
+          name: r.name,
+          type: r.type as "APP" | "DASHBOARD",
+          sectorId: r.sector_id ?? null,
+          icon: r.icon ?? "Layout",
+          tags: r.tags ?? [],
+          embedMode: (r.embed_mode ?? "LINK") as any,
+          openBehavior: (r.open_behavior ?? "BOTH") as any,
+          url: r.url ?? null,
+          metadata: r.metadata ?? {},
+          isActive: r.is_active,
+          createdAt: r.created_at,
+          healthStatusOverride: null,
+          healthMessage: null,
+          healthUpdatedAt: null,
+          healthUpdatedBy: null,
+        })) as Resource[];
+      }
+      throw err;
+    }
   }
 
   async getResourcesForUser(userId: string): Promise<ResourceWithHealth[]> {

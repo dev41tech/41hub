@@ -2837,14 +2837,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const result = await pool.query(
         `SELECT t.id as "ticketId", t.created_at as "createdAt", t.closed_at as "closedAt",
-                t.status, t.priority, t.branch,
+                t.status, t.priority,
+                tc.branch as "branch",
                 tc.name as "category",
                 u.name as "requesterName",
                 s.name as "requesterSector"
          FROM tickets t
          LEFT JOIN ticket_categories tc ON t.category_id = tc.id
-         LEFT JOIN users u ON t.requester_id = u.id
-         LEFT JOIN sectors s ON t.sector_id = s.id
+         LEFT JOIN users u ON t.created_by = u.id
+         LEFT JOIN sectors s ON t.requester_sector_id = s.id
          WHERE 1=1 ${whereClause}
          ORDER BY t.created_at DESC`,
         params
@@ -2870,8 +2871,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.send(csv);
       }
       res.json(rows);
-    } catch (error) {
-      console.error("Error generating tickets report:", error);
+    } catch (error: any) {
+      console.error("[reports/tickets] error code=%s msg=%s", error?.code, error?.message, error?.stack);
+      if (error?.code === "42P01" || error?.code === "42703") {
+        return res.status(503).json({ error: "Schema de banco desatualizado — rode as migrations", code: error.code });
+      }
       res.status(500).json({ error: "Failed to generate report" });
     }
   });
@@ -3117,8 +3121,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ip: req.ip || req.socket.remoteAddress,
       });
       res.status(201).json(alert);
-    } catch (error) {
-      console.error("Error creating alert:", error);
+    } catch (error: any) {
+      console.error("[admin/alerts POST] code=%s msg=%s", error?.code, error?.message, error?.stack);
+      if (error?.code === "42P01") {
+        return res.status(503).json({
+          error: "Tabela system_alerts não existe no banco. Execute as migrations antes de criar alertas.",
+          code: "42P01",
+        });
+      }
       res.status(500).json({ error: "Failed to create alert" });
     }
   });
@@ -3485,6 +3495,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
+  // API info — prevents SPA router from catching /api and showing "forgot to add page"
+  app.get("/api", (req, res) => {
+    res.json({
+      name: "41 Tech Hub API",
+      version: "1.0",
+      description: "REST API for 41 Tech Hub portal",
+      docsUrl: "/admin/integrations?tab=docs",
+      auth: "Bearer hub_<token> in Authorization header",
+      endpoints: {
+        resources: "GET /api/resources",
+        tickets: "GET /api/tickets, POST /api/tickets, GET /api/tickets/:id",
+        alerts: "GET /api/alerts, POST /api/admin/alerts",
+        kb: "GET /api/kb, GET /api/kb/:id, POST /api/kb/:id/feedback",
+        notifications: "GET /api/notifications",
+        admin: "GET /api/admin/resources, GET /api/admin/reports/*, GET /api/admin/audit",
+      },
+    });
+  });
+
   // ── Schema diagnostics (read-only, admin only) ───────────────────────────
   app.get("/api/admin/diagnostics/schema", requireAuth, requireAdmin, async (req, res) => {
     const checks: Array<{ name: string; exists: boolean; detail?: string }> = [];
@@ -3542,6 +3571,42 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err: any) {
       console.error("[diagnostics/schema] error:", err);
       res.status(500).json({ ok: false, error: err.message, checks });
+    }
+  });
+
+  // ── Health diagnostics (read-only, admin only) ───────────────────────────
+  app.get("/api/admin/diagnostics/health", requireAuth, requireAdmin, async (_req, res) => {
+    const requiredTables = [
+      "users", "sectors", "resources", "tickets", "ticket_comments",
+      "kb_articles", "system_alerts", "alert_reads", "notifications",
+      "audit_logs", "typing_sessions", "resource_access_logs",
+      "health_checks",
+    ];
+
+    try {
+      const dbMeta = await pool.query("SELECT current_database() AS db, version() AS ver");
+      const { db, ver } = dbMeta.rows[0] ?? { db: "unknown", ver: "unknown" };
+
+      const tableRes = await pool.query(`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_type = 'BASE TABLE'
+      `);
+      const existingTables = new Set(tableRes.rows.map((r: any) => r.table_name as string));
+      const missingTables = requiredTables.filter((t) => !existingTables.has(t));
+
+      res.json({
+        ok: missingTables.length === 0,
+        timestamp: new Date().toISOString(),
+        database: db,
+        version: ver.split(" ").slice(0, 2).join(" "),
+        missingTables,
+        tableCount: existingTables.size,
+      });
+    } catch (err: any) {
+      console.error("[diagnostics/health] error:", err);
+      res.status(500).json({ ok: false, error: err.message });
     }
   });
 

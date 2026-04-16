@@ -47,6 +47,9 @@ import TicketsNew from "@/pages/tickets/new";
 import TicketsDetail from "@/pages/tickets/detail";
 import TypingTest from "@/pages/typing";
 import TypingLeaderboard from "@/pages/typing-leaderboard";
+import Alerts from "@/pages/alerts";
+import Analytics from "@/pages/analytics";
+import AdminIntegrations from "@/pages/admin/integrations";
 
 function Router() {
   return (
@@ -76,6 +79,10 @@ function Router() {
       <Route path="/admin/reports" component={AdminReports} />
       <Route path="/admin/tickets/categories" component={AdminTicketCategories} />
       <Route path="/admin/tickets/sla" component={AdminTicketSlaPolicies} />
+      <Route path="/admin/integrations" component={AdminIntegrations} />
+      <Route path="/alerts" component={Alerts} />
+      <Route path="/admin/alerts" component={Alerts} />
+      <Route path="/analytics" component={Analytics} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -2,8 +2,14 @@ import { Star, ExternalLink, Monitor, BarChart3 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { ResourceWithHealth } from "@shared/schema";
+import { effectiveHealth } from "@shared/schema";
 import * as LucideIcons from "lucide-react";
 
 interface ResourceCardProps {
@@ -32,6 +38,19 @@ const getStatusColor = (status?: "UP" | "DEGRADED" | "DOWN") => {
   }
 };
 
+const getStatusLabel = (status?: "UP" | "DEGRADED" | "DOWN") => {
+  switch (status) {
+    case "UP":
+      return "Operacional";
+    case "DEGRADED":
+      return "Em manutenção";
+    case "DOWN":
+      return "Fora do ar";
+    default:
+      return "Desconhecido";
+  }
+};
+
 export function ResourceCard({
   resource,
   onOpen,
@@ -40,10 +59,24 @@ export function ResourceCard({
 }: ResourceCardProps) {
   const Icon = getIcon(resource.icon || "Layout");
   const isApp = resource.type === "APP";
+  const displayHealth = effectiveHealth(resource);
+  const hasIssue = displayHealth === "DOWN" || displayHealth === "DEGRADED";
+
+  const statusDot = (
+    <div
+      className={cn(
+        "h-2 w-2 rounded-full shrink-0",
+        getStatusColor(displayHealth)
+      )}
+    />
+  );
 
   return (
     <Card
-      className="group relative hover-elevate cursor-pointer transition-all duration-200"
+      className={cn(
+        "group relative hover-elevate cursor-pointer transition-all duration-200",
+        hasIssue && "border-amber-500/30"
+      )}
       onClick={() => onOpen(resource)}
       data-testid={`card-resource-${resource.id}`}
     >
@@ -68,19 +101,39 @@ export function ResourceCard({
                 <h3 className="font-medium text-foreground truncate">
                   {resource.name}
                 </h3>
-                <div
-                  className={cn(
-                    "h-2 w-2 rounded-full shrink-0",
-                    getStatusColor(resource.healthStatus)
-                  )}
-                  title={resource.healthStatus || "Desconhecido"}
-                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    {statusDot}
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="max-w-[200px]">
+                    <p className="font-medium">{getStatusLabel(displayHealth)}</p>
+                    {resource.healthMessage && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {resource.healthMessage}
+                      </p>
+                    )}
+                    {hasIssue && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Ver alertas para mais detalhes.
+                      </p>
+                    )}
+                  </TooltipContent>
+                </Tooltip>
               </div>
 
               {showSector && resource.sectorName && (
                 <span className="text-xs text-muted-foreground truncate">
                   {resource.sectorName}
                 </span>
+              )}
+
+              {hasIssue && (
+                <Badge
+                  variant={resource.healthStatus === "DOWN" ? "destructive" : "outline"}
+                  className="text-xs w-fit mt-0.5"
+                >
+                  {getStatusLabel(displayHealth)}
+                </Badge>
               )}
 
               {resource.tags && resource.tags.length > 0 && (

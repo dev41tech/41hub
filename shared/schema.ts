@@ -14,7 +14,8 @@ export const authProviderEnum = pgEnum("auth_provider", ["entra", "local"]);
 export const ticketStatusEnum = pgEnum("ticket_status", ["ABERTO", "EM_ANDAMENTO", "AGUARDANDO_USUARIO", "AGUARDANDO_APROVACAO", "RESOLVIDO", "CANCELADO"]);
 export const ticketPriorityEnum = pgEnum("ticket_priority", ["BAIXA", "MEDIA", "ALTA", "URGENTE"]);
 export const ticketEventTypeEnum = pgEnum("ticket_event_type", ["ticket_created", "status_changed", "assignees_changed", "comment_added", "attachment_added", "resolved", "reopened", "priority_changed", "category_changed", "approved", "rejected", "sla_deadline_changed"]);
-export const notificationTypeEnum = pgEnum("notification_type", ["ticket_created", "ticket_comment", "ticket_status", "resource_updated"]);
+export const notificationTypeEnum = pgEnum("notification_type", ["ticket_created", "ticket_comment", "ticket_status", "resource_updated", "alert"]);
+export const alertSeverityEnum = pgEnum("alert_severity", ["info", "warning", "critical"]);
 
 // Users table
 export const users = pgTable("users", {
@@ -74,6 +75,10 @@ export const resources = pgTable("resources", {
   url: text("url"),
   metadata: jsonb("metadata").$type<Record<string, any>>().default({}),
   isActive: boolean("is_active").notNull().default(true),
+  healthStatusOverride: healthStatusEnum("health_status_override").default("UP"),
+  healthMessage: text("health_message"),
+  healthUpdatedAt: timestamp("health_updated_at"),
+  healthUpdatedBy: varchar("health_updated_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -531,12 +536,58 @@ export type TypingSession = typeof typingSessions.$inferSelect;
 export type TypingScore = typeof typingScores.$inferSelect;
 export type InsertTypingScore = z.infer<typeof insertTypingScoreSchema>;
 
+// System Alerts
+export const systemAlerts = pgTable("system_alerts", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  title: varchar("title", { length: 200 }).notNull(),
+  message: text("message").notNull(),
+  severity: alertSeverityEnum("severity").notNull().default("info"),
+  isActive: boolean("is_active").notNull().default(true),
+  startsAt: timestamp("starts_at"),
+  endsAt: timestamp("ends_at"),
+  createdBy: varchar("created_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const systemAlertReads = pgTable("system_alert_reads", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  alertId: varchar("alert_id", { length: 36 }).notNull().references(() => systemAlerts.id, { onDelete: "cascade" }),
+  userId: varchar("user_id", { length: 36 }).notNull().references(() => users.id, { onDelete: "cascade" }),
+  readAt: timestamp("read_at").notNull().defaultNow(),
+}, (t) => [unique().on(t.alertId, t.userId)]);
+
+// API Tokens (for integrations)
+export const apiTokens = pgTable("api_tokens", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name", { length: 120 }).notNull(),
+  tokenHash: varchar("token_hash", { length: 255 }).notNull(),
+  scopes: text("scopes").array().default(sql`ARRAY[]::text[]`),
+  createdBy: varchar("created_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  revokedAt: timestamp("revoked_at"),
+});
+
+export const insertSystemAlertSchema = createInsertSchema(systemAlerts).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertApiTokenSchema = createInsertSchema(apiTokens).omit({ id: true, createdAt: true });
+
+export type SystemAlert = typeof systemAlerts.$inferSelect;
+export type InsertSystemAlert = z.infer<typeof insertSystemAlertSchema>;
+export type SystemAlertRead = typeof systemAlertReads.$inferSelect;
+export type ApiToken = typeof apiTokens.$inferSelect;
+
 // Extended types for frontend
 export type ResourceWithHealth = Resource & {
   healthStatus?: "UP" | "DEGRADED" | "DOWN";
   sectorName?: string;
   isFavorite?: boolean;
+  hasActiveAlert?: boolean;
 };
+
+// Effective health = admin override (if set) else auto-detected
+export function effectiveHealth(r: ResourceWithHealth): "UP" | "DEGRADED" | "DOWN" {
+  return r.healthStatusOverride ?? r.healthStatus ?? "UP";
+}
 
 export type UserWithRoles = User & {
   roles: Array<{

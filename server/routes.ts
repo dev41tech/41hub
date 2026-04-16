@@ -1290,8 +1290,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // --- Audit Logs ---
   app.get("/api/admin/audit", requireAuth, requireAdmin, async (req, res) => {
     try {
-      const logs = await storage.getAuditLogsWithActors(200);
-      res.json(logs);
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+      const action = req.query.action as string | undefined;
+      const page = Math.max(1, parseInt(req.query.page as string || "1", 10));
+      const limit = Math.min(500, Math.max(10, parseInt(req.query.limit as string || "200", 10)));
+      const offset = (page - 1) * limit;
+
+      const params: any[] = [];
+      let where = "WHERE 1=1";
+      if (from) { params.push(from); where += ` AND al.created_at >= $${params.length}::date`; }
+      if (to) { params.push(to); where += ` AND al.created_at <= ($${params.length}::date + interval '1 day')`; }
+      if (action) { params.push(action); where += ` AND al.action = $${params.length}`; }
+
+      params.push(limit); params.push(offset);
+      const result = await pool.query(
+        `SELECT al.id, al.action, al.target_type as "targetType", al.target_id as "targetId",
+                al.ip, al.metadata, al.created_at as "createdAt",
+                u.name as "actorName", u.email as "actorEmail"
+         FROM audit_logs al
+         LEFT JOIN users u ON al.actor_user_id = u.id
+         ${where}
+         ORDER BY al.created_at DESC
+         LIMIT $${params.length - 1} OFFSET $${params.length}`,
+        params
+      );
+      res.json(result.rows);
     } catch (error) {
       console.error("Error fetching audit logs:", error);
       res.status(500).json({ error: "Failed to fetch audit logs" });
@@ -2929,6 +2953,496 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(rows);
     } catch (error) {
       console.error("Error generating notifications report:", error);
+      res.status(500).json({ error: "Failed to generate report" });
+    }
+  });
+
+  // ============ Resource Health Override ============
+
+  app.patch("/api/admin/resources/:id/health", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        healthStatus: z.enum(["UP", "DEGRADED", "DOWN"]),
+        healthMessage: z.string().max(300).nullable().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+
+      const resourceId = req.params.id as string;
+      await pool.query(
+        `UPDATE resources SET health_status_override = $1, health_message = $2,
+         health_updated_at = NOW(), health_updated_by = $3
+         WHERE id = $4`,
+        [parsed.data.healthStatus, parsed.data.healthMessage ?? null, req.user!.id, resourceId]
+      );
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "resource_health_update",
+        targetType: "resource",
+        targetId: resourceId,
+        metadata: parsed.data as any,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error updating resource health:", error);
+      res.status(500).json({ error: "Failed to update resource health" });
+    }
+  });
+
+  // ============ System Alerts ============
+
+  // User: list active alerts with read status
+  app.get("/api/alerts", requireAuth, async (req, res) => {
+    try {
+      const userId = req.user!.id;
+      const activeOnly = req.query.active !== "false";
+      const whereActive = activeOnly
+        ? "WHERE sa.is_active = true AND (sa.starts_at IS NULL OR sa.starts_at <= NOW()) AND (sa.ends_at IS NULL OR sa.ends_at >= NOW())"
+        : "";
+      const result = await pool.query(
+        `SELECT sa.id, sa.title, sa.message, sa.severity, sa.is_active as "isActive",
+                sa.starts_at as "startsAt", sa.ends_at as "endsAt",
+                sa.created_at as "createdAt", u.name as "createdByName",
+                (SELECT sar.id FROM system_alert_reads sar WHERE sar.alert_id = sa.id AND sar.user_id = $1 LIMIT 1) IS NOT NULL as "isRead"
+         FROM system_alerts sa
+         LEFT JOIN users u ON sa.created_by = u.id
+         ${whereActive}
+         ORDER BY sa.created_at DESC`,
+        [userId]
+      );
+      res.json(result.rows);
+    } catch (error) {
+      console.error("Error fetching alerts:", error);
+      res.status(500).json({ error: "Failed to fetch alerts" });
+    }
+  });
+
+  // User: mark alert as read
+  app.post("/api/alerts/:id/read", requireAuth, async (req, res) => {
+    try {
+      const alertId = req.params.id as string;
+      await pool.query(
+        `INSERT INTO system_alert_reads (id, alert_id, user_id, read_at)
+         VALUES (gen_random_uuid(), $1, $2, NOW())
+         ON CONFLICT (alert_id, user_id) DO NOTHING`,
+        [alertId, req.user!.id]
+      );
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error marking alert as read:", error);
+      res.status(500).json({ error: "Failed to mark alert as read" });
+    }
+  });
+
+  // Admin: list all alerts
+  app.get("/api/admin/alerts", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const result = await pool.query(
+        `SELECT sa.id, sa.title, sa.message, sa.severity, sa.is_active as "isActive",
+                sa.starts_at as "startsAt", sa.ends_at as "endsAt",
+                sa.created_at as "createdAt", sa.updated_at as "updatedAt",
+                u.name as "createdByName"
+         FROM system_alerts sa
+         LEFT JOIN users u ON sa.created_by = u.id
+         ORDER BY sa.created_at DESC`
+      );
+      res.json(result.rows);
+    } catch (error) {
+      console.error("Error fetching alerts:", error);
+      res.status(500).json({ error: "Failed to fetch alerts" });
+    }
+  });
+
+  // Admin: create alert
+  app.post("/api/admin/alerts", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        title: z.string().min(1).max(200),
+        message: z.string().min(1).max(2000),
+        severity: z.enum(["info", "warning", "critical"]).default("info"),
+        isActive: z.boolean().default(true),
+        startsAt: z.string().datetime().nullable().optional(),
+        endsAt: z.string().datetime().nullable().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+
+      const result = await pool.query(
+        `INSERT INTO system_alerts (id, title, message, severity, is_active, starts_at, ends_at, created_by, created_at, updated_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+         RETURNING *`,
+        [parsed.data.title, parsed.data.message, parsed.data.severity, parsed.data.isActive,
+         parsed.data.startsAt ?? null, parsed.data.endsAt ?? null, req.user!.id]
+      );
+      const alert = result.rows[0];
+
+      // Generate notifications for all active users if alert is active
+      if (parsed.data.isActive) {
+        await pool.query(
+          `INSERT INTO notifications (id, recipient_user_id, type, title, message, link_url, created_at)
+           SELECT gen_random_uuid(), u.id, 'alert', $1, $2, '/alerts', NOW()
+           FROM users u WHERE u.is_active = true AND u.id != $3`,
+          [parsed.data.title, parsed.data.message, req.user!.id]
+        );
+      }
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "alert_create",
+        targetType: "system_alert",
+        targetId: alert.id,
+        metadata: { title: parsed.data.title, severity: parsed.data.severity } as any,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+      res.status(201).json(alert);
+    } catch (error) {
+      console.error("Error creating alert:", error);
+      res.status(500).json({ error: "Failed to create alert" });
+    }
+  });
+
+  // Admin: update alert
+  app.patch("/api/admin/alerts/:id", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        title: z.string().min(1).max(200).optional(),
+        message: z.string().min(1).max(2000).optional(),
+        severity: z.enum(["info", "warning", "critical"]).optional(),
+        isActive: z.boolean().optional(),
+        startsAt: z.string().datetime().nullable().optional(),
+        endsAt: z.string().datetime().nullable().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+
+      const alertId = req.params.id as string;
+      const sets: string[] = ["updated_at = NOW()"];
+      const params: any[] = [];
+      if (parsed.data.title !== undefined) { params.push(parsed.data.title); sets.push(`title = $${params.length}`); }
+      if (parsed.data.message !== undefined) { params.push(parsed.data.message); sets.push(`message = $${params.length}`); }
+      if (parsed.data.severity !== undefined) { params.push(parsed.data.severity); sets.push(`severity = $${params.length}`); }
+      if (parsed.data.isActive !== undefined) { params.push(parsed.data.isActive); sets.push(`is_active = $${params.length}`); }
+      if (parsed.data.startsAt !== undefined) { params.push(parsed.data.startsAt); sets.push(`starts_at = $${params.length}`); }
+      if (parsed.data.endsAt !== undefined) { params.push(parsed.data.endsAt); sets.push(`ends_at = $${params.length}`); }
+      params.push(alertId);
+      const result = await pool.query(
+        `UPDATE system_alerts SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`,
+        params
+      );
+      if (result.rows.length === 0) return res.status(404).json({ error: "Alerta não encontrado" });
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error("Error updating alert:", error);
+      res.status(500).json({ error: "Failed to update alert" });
+    }
+  });
+
+  // Admin: delete alert
+  app.delete("/api/admin/alerts/:id", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const alertId = req.params.id as string;
+      await pool.query(`DELETE FROM system_alerts WHERE id = $1`, [alertId]);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting alert:", error);
+      res.status(500).json({ error: "Failed to delete alert" });
+    }
+  });
+
+  // ============ Analytics ============
+
+  app.get("/api/admin/analytics/stats", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+      const params: any[] = [];
+      let dateWhere = "WHERE 1=1";
+      if (from) { params.push(from); dateWhere += ` AND t.created_at >= $${params.length}::date`; }
+      if (to) { params.push(to); dateWhere += ` AND t.created_at <= ($${params.length}::date + interval '1 day')`; }
+
+      const [tickets, byStatus, byPriority, topCategories, resources, typing] = await Promise.all([
+        pool.query(
+          `SELECT COUNT(*) as total,
+                  COUNT(*) FILTER (WHERE status IN ('ABERTO','EM_ANDAMENTO','AGUARDANDO_USUARIO','AGUARDANDO_APROVACAO')) as open,
+                  COUNT(*) FILTER (WHERE status = 'RESOLVIDO') as resolved,
+                  COUNT(*) FILTER (WHERE status = 'CANCELADO') as cancelled
+           FROM tickets t ${dateWhere}`,
+          params
+        ),
+        pool.query(
+          `SELECT status, COUNT(*) as count FROM tickets t ${dateWhere} GROUP BY status ORDER BY count DESC`,
+          params
+        ),
+        pool.query(
+          `SELECT priority, COUNT(*) as count FROM tickets t ${dateWhere} GROUP BY priority ORDER BY count DESC`,
+          params
+        ),
+        pool.query(
+          `SELECT tc.name as category, COUNT(*) as count
+           FROM tickets t
+           LEFT JOIN ticket_categories tc ON t.category_id = tc.id
+           ${dateWhere}
+           GROUP BY tc.name ORDER BY count DESC LIMIT 10`,
+          params
+        ),
+        pool.query(
+          `SELECT
+            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE health_status_override = 'UP') as up,
+            COUNT(*) FILTER (WHERE health_status_override = 'DEGRADED') as degraded,
+            COUNT(*) FILTER (WHERE health_status_override = 'DOWN') as down
+           FROM resources WHERE is_active = true`
+        ),
+        pool.query(
+          `SELECT COUNT(*) as totalSessions, ROUND(AVG(wpm)) as avgWpm,
+                  ROUND(AVG(accuracy::numeric), 1) as avgAccuracy
+           FROM typing_scores`
+        ),
+      ]);
+
+      res.json({
+        tickets: tickets.rows[0],
+        byStatus: byStatus.rows,
+        byPriority: byPriority.rows,
+        topCategories: topCategories.rows,
+        resources: resources.rows[0],
+        typing: typing.rows[0],
+      });
+    } catch (error) {
+      console.error("Error fetching analytics:", error);
+      res.status(500).json({ error: "Failed to fetch analytics" });
+    }
+  });
+
+  app.get("/api/admin/analytics/ticket-trend", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const days = Math.min(90, Math.max(7, parseInt(req.query.days as string || "30", 10)));
+      const result = await pool.query(
+        `SELECT DATE(created_at) as date, COUNT(*) as count, status
+         FROM tickets
+         WHERE created_at >= NOW() - interval '${days} days'
+         GROUP BY DATE(created_at), status
+         ORDER BY date ASC`
+      );
+      res.json(result.rows);
+    } catch (error) {
+      console.error("Error fetching ticket trend:", error);
+      res.status(500).json({ error: "Failed to fetch ticket trend" });
+    }
+  });
+
+  // ============ API Tokens (Integrations) ============
+
+  app.get("/api/admin/integrations/tokens", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const result = await pool.query(
+        `SELECT at.id, at.name, at.scopes, at.created_at as "createdAt",
+                at.revoked_at as "revokedAt", u.name as "createdByName"
+         FROM api_tokens at
+         LEFT JOIN users u ON at.created_by = u.id
+         ORDER BY at.created_at DESC`
+      );
+      res.json(result.rows);
+    } catch (error) {
+      console.error("Error fetching tokens:", error);
+      res.status(500).json({ error: "Failed to fetch tokens" });
+    }
+  });
+
+  app.post("/api/admin/integrations/tokens", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const schema = z.object({
+        name: z.string().min(1).max(120),
+        scopes: z.array(z.string()).default(["read"]),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+
+      const rawToken = `hub_${crypto.randomBytes(24).toString("hex")}`;
+      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+
+      const result = await pool.query(
+        `INSERT INTO api_tokens (id, name, token_hash, scopes, created_by, created_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW())
+         RETURNING id, name, scopes, created_at as "createdAt"`,
+        [parsed.data.name, tokenHash, parsed.data.scopes, req.user!.id]
+      );
+
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "api_token_create",
+        targetType: "api_token",
+        targetId: result.rows[0].id,
+        metadata: { name: parsed.data.name, scopes: parsed.data.scopes } as any,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+
+      // Return raw token once
+      res.status(201).json({ ...result.rows[0], token: rawToken });
+    } catch (error) {
+      console.error("Error creating token:", error);
+      res.status(500).json({ error: "Failed to create token" });
+    }
+  });
+
+  app.delete("/api/admin/integrations/tokens/:id", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const tokenId = req.params.id as string;
+      await pool.query(
+        `UPDATE api_tokens SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL`,
+        [tokenId]
+      );
+      await storage.createAuditLog({
+        actorUserId: req.user!.id,
+        action: "api_token_revoke",
+        targetType: "api_token",
+        targetId: tokenId,
+        ip: req.ip || req.socket.remoteAddress,
+      });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error revoking token:", error);
+      res.status(500).json({ error: "Failed to revoke token" });
+    }
+  });
+
+  // ============ New Reports ============
+
+  app.get("/api/admin/reports/users", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const format = (req.query.format as string) || "json";
+      if (format !== "csv" && format !== "json") return res.status(400).json({ error: "Formato inválido. Use csv ou json." });
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+      const params: any[] = [];
+      let where = "WHERE 1=1";
+      if (from) { params.push(from); where += ` AND u.created_at >= $${params.length}::date`; }
+      if (to) { params.push(to); where += ` AND u.created_at <= ($${params.length}::date + interval '1 day')`; }
+
+      const result = await pool.query(
+        `SELECT u.id, u.name, u.email, u.auth_provider as "authProvider",
+                u.is_active as "isActive", u.created_at as "createdAt",
+                STRING_AGG(DISTINCT s.name, ', ') as sectors
+         FROM users u
+         LEFT JOIN user_sector_roles usr ON u.id = usr.user_id
+         LEFT JOIN sectors s ON usr.sector_id = s.id
+         ${where}
+         GROUP BY u.id, u.name, u.email, u.auth_provider, u.is_active, u.created_at
+         ORDER BY u.name`,
+        params
+      );
+      const rows = result.rows.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        email: r.email,
+        authProvider: r.authProvider,
+        isActive: r.isActive ? "Sim" : "Não",
+        sectors: r.sectors || "",
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : "",
+      }));
+
+      if (format === "csv") {
+        const csv = toCsv(["id", "name", "email", "authProvider", "isActive", "sectors", "createdAt"], rows);
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", 'attachment; filename="users_report.csv"');
+        return res.send(csv);
+      }
+      res.json(rows);
+    } catch (error) {
+      console.error("Error generating users report:", error);
+      res.status(500).json({ error: "Failed to generate report" });
+    }
+  });
+
+  app.get("/api/admin/reports/typing", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const format = (req.query.format as string) || "json";
+      if (format !== "csv" && format !== "json") return res.status(400).json({ error: "Formato inválido. Use csv ou json." });
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+      const difficulty = req.query.difficulty as string | undefined;
+      const params: any[] = [];
+      let where = "WHERE 1=1";
+      if (from) { params.push(from); where += ` AND ts.created_at >= $${params.length}::date`; }
+      if (to) { params.push(to); where += ` AND ts.created_at <= ($${params.length}::date + interval '1 day')`; }
+      if (difficulty) { params.push(parseInt(difficulty, 10)); where += ` AND ts.difficulty = $${params.length}`; }
+
+      const result = await pool.query(
+        `SELECT u.name, u.email, ts.wpm, ts.accuracy, ts.difficulty,
+                ts.duration_ms as "durationMs", ts.month_key as "monthKey", ts.created_at as "createdAt"
+         FROM typing_scores ts
+         JOIN users u ON ts.user_id = u.id
+         ${where}
+         ORDER BY ts.wpm DESC`,
+        params
+      );
+      const rows = result.rows.map((r: any) => ({
+        name: r.name,
+        email: r.email,
+        wpm: r.wpm,
+        accuracy: r.accuracy,
+        difficulty: r.difficulty,
+        durationMs: r.durationMs,
+        monthKey: r.monthKey,
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : "",
+      }));
+
+      if (format === "csv") {
+        const csv = toCsv(["name", "email", "wpm", "accuracy", "difficulty", "durationMs", "monthKey", "createdAt"], rows);
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", 'attachment; filename="typing_report.csv"');
+        return res.send(csv);
+      }
+      res.json(rows);
+    } catch (error) {
+      console.error("Error generating typing report:", error);
+      res.status(500).json({ error: "Failed to generate report" });
+    }
+  });
+
+  app.get("/api/admin/reports/audit-logs", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const format = (req.query.format as string) || "json";
+      if (format !== "csv" && format !== "json") return res.status(400).json({ error: "Formato inválido. Use csv ou json." });
+      const from = req.query.from as string | undefined;
+      const to = req.query.to as string | undefined;
+      const params: any[] = [];
+      let where = "WHERE 1=1";
+      if (from) { params.push(from); where += ` AND al.created_at >= $${params.length}::date`; }
+      if (to) { params.push(to); where += ` AND al.created_at <= ($${params.length}::date + interval '1 day')`; }
+
+      const result = await pool.query(
+        `SELECT al.id, al.action, al.target_type as "targetType", al.target_id as "targetId",
+                al.ip, al.created_at as "createdAt",
+                u.name as "actorName", u.email as "actorEmail"
+         FROM audit_logs al
+         LEFT JOIN users u ON al.actor_user_id = u.id
+         ${where}
+         ORDER BY al.created_at DESC
+         LIMIT 10000`,
+        params
+      );
+      const rows = result.rows.map((r: any) => ({
+        id: r.id,
+        action: r.action,
+        targetType: r.targetType || "",
+        targetId: r.targetId || "",
+        actorName: r.actorName || "Sistema",
+        actorEmail: r.actorEmail || "",
+        ip: r.ip || "",
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : "",
+      }));
+
+      if (format === "csv") {
+        const csv = toCsv(["id", "action", "targetType", "targetId", "actorName", "actorEmail", "ip", "createdAt"], rows);
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", 'attachment; filename="audit_logs_report.csv"');
+        return res.send(csv);
+      }
+      res.json(rows);
+    } catch (error) {
+      console.error("Error generating audit logs report:", error);
       res.status(500).json({ error: "Failed to generate report" });
     }
   });

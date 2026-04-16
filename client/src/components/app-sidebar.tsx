@@ -20,7 +20,7 @@ import {
   Bell,
   LineChart,
   Database,
-  ShieldAlert,
+  BookOpen,
 } from "lucide-react";
 import { ThemeLogo } from "@/components/theme-logo";
 import {
@@ -53,21 +53,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
+// Admin submenu: only config/management items
 const adminSubItems = [
   { title: "Usuários", url: "/admin/users", icon: Users },
   { title: "Recursos", url: "/admin/resources", icon: Database },
   { title: "Config. Chamados", url: "/admin/tickets-settings", icon: FileText },
   { title: "Config. Digitação", url: "/admin/typing", icon: Keyboard },
   { title: "Integrações", url: "/admin/integrations", icon: Puzzle },
-  { title: "Relatórios", url: "/admin/reports", icon: BarChart2 },
-  { title: "Analytics", url: "/analytics", icon: LineChart },
-  { title: "Auditoria", url: "/admin/audit", icon: Search },
 ];
 
 const recursosSubItems = [
@@ -85,7 +78,7 @@ export function AppSidebar() {
     ["/apps", "/dashboards", "/favorites"].some((p) => location.startsWith(p))
   );
   const [adminOpen, setAdminOpen] = useState(
-    location.startsWith("/admin") || location.startsWith("/analytics")
+    location.startsWith("/admin")
   );
 
   const getInitials = (name: string) => {
@@ -203,7 +196,7 @@ export function AppSidebar() {
               <SidebarMenuItem>
                 <SidebarMenuButton
                   asChild
-                  isActive={location.startsWith("/alerts")}
+                  isActive={location === "/alerts" || location === "/admin/alerts"}
                   data-testid="nav-alertas"
                 >
                   <Link href="/alerts">
@@ -212,6 +205,22 @@ export function AppSidebar() {
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+
+              {/* Analytics — menu principal */}
+              {isAdmin && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location.startsWith("/analytics")}
+                    data-testid="nav-analytics"
+                  >
+                    <Link href="/analytics">
+                      <LineChart className="h-4 w-4" />
+                      <span>Analytics</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -234,16 +243,59 @@ export function AppSidebar() {
                 </SidebarMenuButton>
               </SidebarMenuItem>
 
-              {/* Admin submenu */}
+              {/* Bases de Conhecimento */}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={location.startsWith("/kb")}
+                  data-testid="nav-kb"
+                >
+                  <Link href="/kb">
+                    <BookOpen className="h-4 w-4" />
+                    <span>Base de Conhecimento</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+
+              {/* Relatórios — admin only, fora do subgrupo */}
+              {isAdmin && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location.startsWith("/admin/reports")}
+                    data-testid="nav-relatorios"
+                  >
+                    <Link href="/admin/reports">
+                      <BarChart2 className="h-4 w-4" />
+                      <span>Relatórios</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+
+              {/* Auditoria — admin only, fora do subgrupo */}
+              {isAdmin && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location.startsWith("/admin/audit")}
+                    data-testid="nav-auditoria"
+                  >
+                    <Link href="/admin/audit">
+                      <Search className="h-4 w-4" />
+                      <span>Auditoria</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+
+              {/* Admin submenu (config only) */}
               {isAdmin && (
                 <Collapsible open={adminOpen} onOpenChange={setAdminOpen}>
                   <SidebarMenuItem>
                     <CollapsibleTrigger asChild>
                       <SidebarMenuButton
-                        isActive={
-                          location.startsWith("/admin") ||
-                          location.startsWith("/analytics")
-                        }
+                        isActive={adminSubItems.some((i) => isAdminItemActive(i))}
                         data-testid="nav-admin"
                       >
                         <Settings className="h-4 w-4" />
@@ -259,49 +311,24 @@ export function AppSidebar() {
                       <SidebarMenuSub>
                         {adminSubItems.map((item) => (
                           <SidebarMenuSubItem key={item.title}>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <SidebarMenuSubButton
-                                  asChild
-                                  isActive={isAdminItemActive(item)}
-                                  data-testid={`nav-admin-${item.title
-                                    .toLowerCase()
-                                    .replace(/[\s.]+/g, "-")}`}
-                                >
-                                  <Link href={item.url}>
-                                    <item.icon className="h-3.5 w-3.5 shrink-0" />
-                                    <span className="truncate">
-                                      {item.title}
-                                    </span>
-                                  </Link>
-                                </SidebarMenuSubButton>
-                              </TooltipTrigger>
-                              <TooltipContent side="right">
-                                {item.title}
-                              </TooltipContent>
-                            </Tooltip>
+                            <SidebarMenuSubButton
+                              asChild
+                              isActive={isAdminItemActive(item)}
+                              data-testid={`nav-admin-${item.title
+                                .toLowerCase()
+                                .replace(/[\s.]+/g, "-")}`}
+                            >
+                              <Link href={item.url}>
+                                <item.icon className="h-3.5 w-3.5 shrink-0" />
+                                <span>{item.title}</span>
+                              </Link>
+                            </SidebarMenuSubButton>
                           </SidebarMenuSubItem>
                         ))}
                       </SidebarMenuSub>
                     </CollapsibleContent>
                   </SidebarMenuItem>
                 </Collapsible>
-              )}
-
-              {/* Alertas de Segurança - admin only shortcut */}
-              {isAdmin && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={false}
-                    data-testid="nav-admin-alerts"
-                  >
-                    <Link href="/admin/alerts">
-                      <ShieldAlert className="h-4 w-4" />
-                      <span>Avisos (Admin)</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
               )}
             </SidebarMenu>
           </SidebarGroupContent>

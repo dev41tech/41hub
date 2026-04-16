@@ -48,8 +48,11 @@ import TicketsDetail from "@/pages/tickets/detail";
 import TypingTest from "@/pages/typing";
 import TypingLeaderboard from "@/pages/typing-leaderboard";
 import Alerts from "@/pages/alerts";
+import AdminAlerts from "@/pages/admin-alerts";
 import Analytics from "@/pages/analytics";
 import AdminIntegrations from "@/pages/admin/integrations";
+import Kb from "@/pages/kb";
+import KbArticle from "@/pages/kb-article";
 
 function Router() {
   return (
@@ -81,8 +84,10 @@ function Router() {
       <Route path="/admin/tickets/sla" component={AdminTicketSlaPolicies} />
       <Route path="/admin/integrations" component={AdminIntegrations} />
       <Route path="/alerts" component={Alerts} />
-      <Route path="/admin/alerts" component={Alerts} />
+      <Route path="/admin/alerts" component={AdminAlerts} />
       <Route path="/analytics" component={Analytics} />
+      <Route path="/kb" component={Kb} />
+      <Route path="/kb/articles/:id" component={KbArticle} />
       <Route component={NotFound} />
     </Switch>
   );

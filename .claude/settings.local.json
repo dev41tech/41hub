@@ -10,7 +10,14 @@
       "Bash(node \"C:\\\\Users\\\\kauan.brasileiro\\\\Documents\\\\1. Apps\\\\41-Tech-Hub\\\\node_modules\\\\typescript\\\\bin\\\\tsc\" --noEmit -p \"C:\\\\Users\\\\kauan.brasileiro\\\\Documents\\\\1. Apps\\\\41-Tech-Hub\\\\tsconfig.json\")",
       "Bash(sort -t: -k2 -n)",
       "Bash(npx tsc:*)",
-      "Bash(grep -v \"^$\")"
+      "Bash(grep -v \"^$\")",
+      "Bash(node_modules\\\\.bin\\\\tsc --noEmit)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(awk -F'\\(' '{print $2}')",
+      "Bash(awk -F':' '{print $1}')",
+      "Bash(awk -F',' '{if \\($1 > 1290\\) print $1}')",
+      "Bash(awk -F',' '{print $1}')",
+      "Bash(awk '{if \\($1 > 2942\\) print $1}')"
     ]
   }
 }

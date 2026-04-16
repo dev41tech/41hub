@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Pencil, Trash2, Layout, Monitor, BarChart3 } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Trash2, Layout, Monitor, BarChart3, Activity } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -141,6 +141,17 @@ export default function AdminResources() {
     onError: () => {
       toast({ title: "Erro ao excluir recurso", variant: "destructive" });
     },
+  });
+
+  const healthMutation = useMutation({
+    mutationFn: ({ id, healthStatus, healthMessage }: { id: string; healthStatus: string; healthMessage?: string }) =>
+      apiRequest("PATCH", `/api/admin/resources/${id}/health`, { healthStatus, healthMessage }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/resources"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/resources"] });
+      toast({ title: "Status de saúde atualizado" });
+    },
+    onError: () => toast({ title: "Erro ao atualizar saúde", variant: "destructive" }),
   });
 
   const handleOpenCreate = () => {
@@ -285,6 +296,12 @@ export default function AdminResources() {
                     <TableHead>Setor</TableHead>
                     <TableHead>Modo</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>
+                      <div className="flex items-center gap-1">
+                        <Activity className="h-3.5 w-3.5" />
+                        Saúde
+                      </div>
+                    </TableHead>
                     <TableHead className="w-[100px]">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -336,6 +353,36 @@ export default function AdminResources() {
                         <span className={resource.isActive ? "text-status-online" : "text-muted-foreground"}>
                           {resource.isActive ? "Ativo" : "Inativo"}
                         </span>
+                      </TableCell>
+                      <TableCell>
+                        <Select
+                          value={(resource as any).healthStatusOverride || "UP"}
+                          onValueChange={(v) => healthMutation.mutate({ id: resource.id, healthStatus: v })}
+                        >
+                          <SelectTrigger className="h-7 w-32 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="UP">
+                              <span className="flex items-center gap-1.5">
+                                <span className="h-2 w-2 rounded-full bg-green-500 inline-block" />
+                                OK
+                              </span>
+                            </SelectItem>
+                            <SelectItem value="DEGRADED">
+                              <span className="flex items-center gap-1.5">
+                                <span className="h-2 w-2 rounded-full bg-amber-500 inline-block" />
+                                Manutenção
+                              </span>
+                            </SelectItem>
+                            <SelectItem value="DOWN">
+                              <span className="flex items-center gap-1.5">
+                                <span className="h-2 w-2 rounded-full bg-red-500 inline-block" />
+                                Fora do ar
+                              </span>
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1">

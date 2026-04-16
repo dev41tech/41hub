@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(popover)",
+      "Bash(collapsible\")",
+      "Bash(npm run:*)",
+      "Bash(export PATH=\"/c/Program Files/nodejs:$PATH\")",
+      "Bash(tsc --version)",
+      "Bash(node node_modules/.bin/tsc --noEmit)",
+      "Bash(node \"C:\\\\Users\\\\kauan.brasileiro\\\\Documents\\\\1. Apps\\\\41-Tech-Hub\\\\node_modules\\\\typescript\\\\bin\\\\tsc\" --noEmit -p \"C:\\\\Users\\\\kauan.brasileiro\\\\Documents\\\\1. Apps\\\\41-Tech-Hub\\\\tsconfig.json\")",
+      "Bash(sort -t: -k2 -n)",
+      "Bash(npx tsc:*)",
+      "Bash(grep -v \"^$\")"
+    ]
+  }
+}

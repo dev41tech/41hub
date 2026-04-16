@@ -18,9 +18,20 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  SelectGroup,
-  SelectLabel,
 } from "@/components/ui/select";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,11 +53,14 @@ import {
   Paperclip,
   AlertTriangle,
   CheckCircle2,
+  ChevronsUpDown,
+  Check,
 } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import type { Sector, TicketCategoryTree, KbArticle } from "@shared/schema";
 
 type KbArticleWithMeta = KbArticle & {
@@ -133,7 +147,7 @@ export default function TicketsNew() {
   const [description, setDescription] = useState("");
   const [requesterSectorId, setRequesterSectorId] = useState("");
   const [categoryId, setCategoryId] = useState("");
-  const [categorySearch, setCategorySearch] = useState("");
+  const [categoryComboOpen, setCategoryComboOpen] = useState(false);
   const [priority, setPriority] = useState("MEDIA");
   const [showTemplateConfirm, setShowTemplateConfirm] = useState(false);
   const pendingTemplate = useRef("");
@@ -180,17 +194,22 @@ export default function TicketsNew() {
     }
   }, [availableSectors, requesterSectorId]);
 
+  // Flatten all categories; only leaf nodes (children of root, or root without children) are selectable
+  const leafCategories = categories.flatMap((root) => {
+    if (root.children && root.children.length > 0) {
+      return root.children.map((child) => ({
+        ...child,
+        displayPath: `${root.name} / ${child.name}`,
+      }));
+    }
+    return [{ ...root, displayPath: root.name }];
+  });
+
   const allCategories = categories.flatMap((root) => {
     const items: TicketCategoryTree[] = [root];
     if (root.children) items.push(...root.children);
     return items;
   });
-
-  const filteredCategories = categorySearch.trim()
-    ? allCategories.filter((c) =>
-        c.name.toLowerCase().includes(categorySearch.toLowerCase())
-      )
-    : allCategories;
 
   const selectedCategory = allCategories.find((c) => c.id === categoryId);
   const categoryTemplate = (selectedCategory as any)?.descriptionTemplate || "";
@@ -328,59 +347,57 @@ export default function TicketsNew() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                {/* Category search */}
-                <div className="space-y-2">
-                  <Label>Buscar categoria</Label>
-                  <div className="relative">
-                    <Input
-                      placeholder="Digite para filtrar categorias..."
-                      value={categorySearch}
-                      onChange={(e) => setCategorySearch(e.target.value)}
-                      data-testid="input-category-search"
-                    />
-                  </div>
-                </div>
-
-                {/* Category select */}
+                {/* Category combobox */}
                 <div className="space-y-2">
                   <Label htmlFor="categoryId">Categoria</Label>
-                  <Select value={categoryId} onValueChange={handleCategoryChange}>
-                    <SelectTrigger data-testid="select-category">
-                      <SelectValue placeholder="Selecione a categoria" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categorySearch.trim() ? (
-                        filteredCategories.length === 0 ? (
-                          <div className="p-2 text-sm text-muted-foreground text-center">
-                            Nenhuma categoria encontrada
-                          </div>
-                        ) : (
-                          filteredCategories.map((c) => (
-                            <SelectItem key={c.id} value={c.id}>
-                              {c.name}
-                            </SelectItem>
-                          ))
-                        )
-                      ) : (
-                        categories.map((root) => (
-                          <SelectGroup key={root.id}>
-                            <SelectLabel>{root.name}</SelectLabel>
-                            {root.children && root.children.length > 0 ? (
-                              root.children.map((child) => (
-                                <SelectItem key={child.id} value={child.id}>
-                                  {child.name}
-                                </SelectItem>
-                              ))
-                            ) : (
-                              <SelectItem value={root.id}>
-                                {root.name}
-                              </SelectItem>
-                            )}
-                          </SelectGroup>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                  <Popover open={categoryComboOpen} onOpenChange={setCategoryComboOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={categoryComboOpen}
+                        className="w-full justify-between font-normal"
+                        data-testid="select-category"
+                      >
+                        {categoryId
+                          ? (leafCategories.find((c) => c.id === categoryId)?.displayPath ?? "Categoria selecionada")
+                          : "Buscar categoria..."}
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                      <Command>
+                        <CommandInput
+                          placeholder="Digite para filtrar..."
+                          data-testid="input-category-search"
+                        />
+                        <CommandList>
+                          <CommandEmpty>Nenhuma categoria encontrada</CommandEmpty>
+                          <CommandGroup>
+                            {leafCategories.map((cat) => (
+                              <CommandItem
+                                key={cat.id}
+                                value={cat.displayPath}
+                                onSelect={() => {
+                                  handleCategoryChange(cat.id);
+                                  setCategoryComboOpen(false);
+                                }}
+                                data-testid={`category-option-${cat.id}`}
+                              >
+                                <Check
+                                  className={cn(
+                                    "mr-2 h-4 w-4",
+                                    categoryId === cat.id ? "opacity-100" : "opacity-0"
+                                  )}
+                                />
+                                {cat.displayPath}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
                 </div>
 
                 {/* KB suggestions */}
@@ -489,7 +506,9 @@ export default function TicketsNew() {
                   <div className="space-y-2">
                     <Label>Categoria selecionada</Label>
                     <div className="flex items-center gap-2 px-3 py-2 border rounded-md bg-muted text-sm">
-                      <span className="font-medium">{selectedCategory?.name}</span>
+                      <span className="font-medium">
+                        {leafCategories.find((c) => c.id === categoryId)?.displayPath ?? selectedCategory?.name}
+                      </span>
                       <Button
                         type="button"
                         variant="ghost"

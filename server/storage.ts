@@ -231,6 +231,7 @@ export interface IStorage {
 
   listTicketComments(ticketId: string, user: UserWithRoles): Promise<(TicketComment & { authorName?: string; authorEmail?: string })[]>;
   listTicketAttachments(ticketId: string, user: UserWithRoles): Promise<TicketAttachment[]>;
+  listTicketEvents(ticketId: string): Promise<Array<import("@shared/schema").TicketEvent & { actorName?: string }>>;
 
   getTicketAttachmentRequirements(ticketId: string): Promise<Array<{ key: string; label: string; mime?: string[]; required?: boolean; satisfied: boolean }>>;
 
@@ -1479,6 +1480,16 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(ticketAttachments)
       .where(eq(ticketAttachments.ticketId, ticketId))
       .orderBy(asc(ticketAttachments.createdAt));
+  }
+
+  async listTicketEvents(ticketId: string): Promise<Array<import("@shared/schema").TicketEvent & { actorName?: string }>> {
+    const evs = await db
+      .select({ event: ticketEvents, actorName: users.name })
+      .from(ticketEvents)
+      .leftJoin(users, eq(ticketEvents.actorUserId, users.id))
+      .where(eq(ticketEvents.ticketId, ticketId))
+      .orderBy(asc(ticketEvents.createdAt));
+    return evs.map(e => ({ ...e.event, actorName: e.actorName || undefined }));
   }
 
   async getTicketAttachmentRequirements(ticketId: string): Promise<Array<{ key: string; label: string; mime?: string[]; required?: boolean; satisfied: boolean }>> {

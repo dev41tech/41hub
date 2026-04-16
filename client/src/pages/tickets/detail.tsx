@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   Select,
   SelectContent,
@@ -25,6 +26,25 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   ArrowLeft,
   ArrowRight,
@@ -43,16 +63,21 @@ import {
   HelpCircle,
   ShieldCheck,
   XCircle,
+  Check,
+  ChevronsUpDown,
+  Info,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import type {
   TicketWithDetails,
   TicketComment,
   TicketAttachment,
   TicketSlaCycle,
-  TicketCategoryTree,
-  Sector,
+  TicketEvent,
 } from "@shared/schema";
+
+// ── Labels / colours ─────────────────────────────────────────────────────────
 
 const statusLabels: Record<string, string> = {
   ABERTO: "Aberto",
@@ -97,6 +122,10 @@ function formatDate(dateStr: string | Date | null | undefined): string {
   });
 }
 
+function getInitials(name: string) {
+  return name.split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
+}
+
 function getSlaInfo(cycle: TicketSlaCycle | null | undefined) {
   if (!cycle) return null;
   const now = new Date();
@@ -130,6 +159,7 @@ function getSlaInfo(cycle: TicketSlaCycle | null | undefined) {
 }
 
 type CommentWithAuthor = TicketComment & { authorName?: string; authorEmail?: string };
+type TicketEventWithActor = TicketEvent & { actorName?: string };
 
 interface ChecklistItem {
   id: string;
@@ -149,6 +179,147 @@ interface DirectoryUser {
   isAdmin?: boolean;
 }
 
+// ── SLA Event card ────────────────────────────────────────────────────────────
+
+function SlaEventCard({ event }: { event: TicketEventWithActor }) {
+  const data = event.data as any;
+  return (
+    <div className="border rounded-lg p-3 bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-sm font-medium flex items-center gap-1.5">
+          <Clock className="h-3.5 w-3.5 text-blue-600" />
+          <span className="text-blue-800 dark:text-blue-200">SLA alterado</span>
+          {event.actorName && (
+            <span className="text-xs text-muted-foreground">por {event.actorName}</span>
+          )}
+        </span>
+        <span className="text-xs text-muted-foreground">{formatDate(event.createdAt)}</span>
+      </div>
+      <p className="text-sm text-blue-900 dark:text-blue-100">
+        🕒 Prazo de resolução:{" "}
+        {data?.from ? <span className="line-through text-muted-foreground">{formatDate(data.from)}</span> : "—"}
+        {" → "}
+        <span className="font-medium">{formatDate(data?.to)}</span>
+      </p>
+      {data?.note && (
+        <p className="text-xs text-muted-foreground mt-1">
+          <span className="font-medium">Motivo:</span> {data.note}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Assignees chips + edit popover ──────────────────────────────────────────
+
+interface AssigneesBlockProps {
+  assignees: Array<{ userId: string; userName: string; userEmail: string }>;
+  isAdmin: boolean;
+  assignableUsers: DirectoryUser[];
+  onSave: (ids: string[]) => void;
+  isSaving: boolean;
+}
+
+function AssigneesBlock({ assignees, isAdmin, assignableUsers, onSave, isSaving }: AssigneesBlockProps) {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<string[]>(assignees.map(a => a.userId));
+
+  function toggle(id: string) {
+    setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  function handleSave() {
+    onSave(selected);
+    setOpen(false);
+  }
+
+  return (
+    <div className="flex justify-between items-start gap-2">
+      <span className="text-muted-foreground text-sm shrink-0">Responsáveis</span>
+      <div className="flex flex-col items-end gap-1.5">
+        {assignees.length === 0 ? (
+          <span className="text-sm text-muted-foreground italic">Nenhum</span>
+        ) : (
+          <div className="flex flex-wrap gap-1 justify-end">
+            {assignees.map((a) => (
+              <TooltipProvider key={a.userId}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5">
+                      <Avatar className="h-4 w-4">
+                        <AvatarFallback className="text-[9px] bg-primary/20">
+                          {getInitials(a.userName)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="text-xs font-medium">{a.userName.split(" ")[0]}</span>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    <p>{a.userName}</p>
+                    <p className="text-xs text-muted-foreground">{a.userEmail}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            ))}
+          </div>
+        )}
+        {isAdmin && (
+          <Popover open={open} onOpenChange={(v) => {
+            if (v) setSelected(assignees.map(a => a.userId));
+            setOpen(v);
+          }}>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" data-testid="button-edit-assignees">
+                <Pencil className="h-3 w-3 mr-1" />
+                Editar
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-64 p-0" align="end">
+              <Command>
+                <CommandInput placeholder="Buscar usuário..." />
+                <CommandList>
+                  <CommandEmpty>Nenhum usuário encontrado</CommandEmpty>
+                  <CommandGroup heading="Admins disponíveis">
+                    {assignableUsers.map((u) => (
+                      <CommandItem
+                        key={u.id}
+                        value={u.name}
+                        onSelect={() => toggle(u.id)}
+                        data-testid={`assignee-option-${u.id}`}
+                      >
+                        <Check
+                          className={cn("mr-2 h-4 w-4", selected.includes(u.id) ? "opacity-100" : "opacity-0")}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm truncate">{u.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{u.email}</p>
+                        </div>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+              <div className="border-t p-2 flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>Cancelar</Button>
+                <Button
+                  size="sm"
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  data-testid="button-save-assignees"
+                >
+                  {isSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Salvar"}
+                </Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
 export default function TicketsDetail() {
   const [, params] = useRoute("/tickets/:id");
   const ticketId = params?.id;
@@ -156,15 +327,17 @@ export default function TicketsDetail() {
   const { toast } = useToast();
   const isAdmin = user?.isAdmin;
   const isCoordinator = user?.roles?.some(r => r.roleName === "Coordenador");
-  const isUserRole = !isAdmin && !isCoordinator;
 
   const [commentBody, setCommentBody] = useState("");
   const [isInternal, setIsInternal] = useState(false);
-  const [selectedAssignees, setSelectedAssignees] = useState<string[]>([]);
-  const [assigneesInitialized, setAssigneesInitialized] = useState(false);
   const [deadlineDialogOpen, setDeadlineDialogOpen] = useState(false);
   const [newDeadline, setNewDeadline] = useState("");
   const [deadlineReason, setDeadlineReason] = useState("");
+
+  // Request-info modal state
+  const [requestInfoOpen, setRequestInfoOpen] = useState(false);
+  const [requestInfoMessage, setRequestInfoMessage] = useState("");
+  const [requestInfoMarkAwaiting, setRequestInfoMarkAwaiting] = useState(true);
 
   const { data: ticket, isLoading } = useQuery<TicketWithDetails>({
     queryKey: ["/api/tickets", ticketId],
@@ -181,6 +354,16 @@ export default function TicketsDetail() {
     queryFn: async () => {
       const res = await fetch(`/api/tickets/${ticketId}/comments`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!ticketId,
+  });
+
+  const { data: slaEvents = [] } = useQuery<TicketEventWithActor[]>({
+    queryKey: ["/api/tickets", ticketId, "events"],
+    queryFn: async () => {
+      const res = await fetch(`/api/tickets/${ticketId}/events`, { credentials: "include" });
+      if (!res.ok) return [];
       return res.json();
     },
     enabled: !!ticketId,
@@ -208,14 +391,8 @@ export default function TicketsDetail() {
 
   const assignableUsers = (() => {
     if (!ticket || !allUsers.length) return [];
-    const isUserAdmin = (u: DirectoryUser) => u.isAdmin || u.roles?.some(r => r.roleName === "Admin");
-    return allUsers.filter(u => isUserAdmin(u));
+    return allUsers.filter(u => u.isAdmin || u.roles?.some(r => r.roleName === "Admin"));
   })();
-
-  if (ticket && !assigneesInitialized && ticket.assignees) {
-    setSelectedAssignees(ticket.assignees.map(a => a.userId));
-    setAssigneesInitialized(true);
-  }
 
   const updateMutation = useMutation({
     mutationFn: async (patch: Record<string, any>) => {
@@ -224,11 +401,10 @@ export default function TicketsDetail() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId, "events"] });
       toast({ title: "Chamado atualizado" });
     },
-    onError: (e: any) => {
-      toast({ title: "Erro", description: e.message, variant: "destructive" });
-    },
+    onError: (e: any) => toast({ title: "Erro", description: e.message, variant: "destructive" }),
   });
 
   const assignMutation = useMutation({
@@ -239,9 +415,7 @@ export default function TicketsDetail() {
       queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId] });
       toast({ title: "Responsáveis atualizados" });
     },
-    onError: (e: any) => {
-      toast({ title: "Erro", description: e.message, variant: "destructive" });
-    },
+    onError: (e: any) => toast({ title: "Erro", description: e.message, variant: "destructive" }),
   });
 
   const commentMutation = useMutation({
@@ -258,9 +432,7 @@ export default function TicketsDetail() {
       queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId, "comments"] });
       toast({ title: "Comentário adicionado" });
     },
-    onError: (e: any) => {
-      toast({ title: "Erro", description: e.message, variant: "destructive" });
-    },
+    onError: (e: any) => toast({ title: "Erro", description: e.message, variant: "destructive" }),
   });
 
   const uploadMutation = useMutation({
@@ -282,9 +454,7 @@ export default function TicketsDetail() {
       queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId, "attachments"] });
       toast({ title: "Anexo enviado" });
     },
-    onError: (e: any) => {
-      toast({ title: "Erro no upload", description: e.message, variant: "destructive" });
-    },
+    onError: (e: any) => toast({ title: "Erro no upload", description: e.message, variant: "destructive" }),
   });
 
   const { data: checklist = [] } = useQuery<ChecklistItem[]>({
@@ -301,27 +471,27 @@ export default function TicketsDetail() {
     mutationFn: async ({ itemId, isDone }: { itemId: string; isDone: boolean }) => {
       await apiRequest("PATCH", `/api/tickets/${ticketId}/checklist/${itemId}`, { isDone });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId, "checklist"] });
-    },
-    onError: (e: any) => {
-      toast({ title: "Erro", description: e.message, variant: "destructive" });
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId, "checklist"] }),
+    onError: (e: any) => toast({ title: "Erro", description: e.message, variant: "destructive" }),
   });
 
   const requestInfoMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/tickets/${ticketId}/request-info`, {});
+      const res = await apiRequest("POST", `/api/tickets/${ticketId}/request-info`, {
+        message: requestInfoMessage,
+        markAwaiting: requestInfoMarkAwaiting,
+      });
       return res.json();
     },
-    onSuccess: (data: any) => {
+    onSuccess: () => {
+      setRequestInfoOpen(false);
+      setRequestInfoMessage("");
+      setRequestInfoMarkAwaiting(true);
       queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId] });
       queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId, "comments"] });
-      toast({ title: data.message || "Informações solicitadas" });
+      toast({ title: "Solicitação enviada", description: "O comentário foi registrado no chamado." });
     },
-    onError: (e: any) => {
-      toast({ title: "Erro", description: e.message, variant: "destructive" });
-    },
+    onError: (e: any) => toast({ title: "Erro", description: e.message, variant: "destructive" }),
   });
 
   const [approvalDialogOpen, setApprovalDialogOpen] = useState(false);
@@ -351,12 +521,9 @@ export default function TicketsDetail() {
       setApprovalNote("");
       toast({ title: data.message || "Decisão registrada" });
     },
-    onError: (e: any) => {
-      toast({ title: "Erro", description: e.message, variant: "destructive" });
-    },
+    onError: (e: any) => toast({ title: "Erro", description: e.message, variant: "destructive" }),
   });
 
-  // Admins and coordinators can always comment/attach; plain users cannot.
   const canComment = isAdmin || isCoordinator;
 
   function handleSaveDeadline() {
@@ -369,6 +536,12 @@ export default function TicketsDetail() {
     setNewDeadline("");
     setDeadlineReason("");
   }
+
+  // Build unified timeline: comments + SLA events, sorted by date
+  const timeline = [
+    ...comments.map(c => ({ ...c, _kind: "comment" as const, _date: new Date(c.createdAt) })),
+    ...slaEvents.map(e => ({ ...e, _kind: "sla_event" as const, _date: new Date(e.createdAt) })),
+  ].sort((a, b) => a._date.getTime() - b._date.getTime());
 
   if (isLoading) {
     return (
@@ -388,9 +561,11 @@ export default function TicketsDetail() {
 
   const slaInfo = getSlaInfo(ticket.currentCycle);
   const isManualDeadline = (ticket.currentCycle as any)?.resolutionDueAtManual;
+  const manualReason = (ticket.currentCycle as any)?.resolutionDueAtManualReason;
 
   return (
     <div className="flex flex-col gap-6 p-6">
+      {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/tickets">
           <Button variant="ghost" size="icon" data-testid="button-back">
@@ -418,6 +593,7 @@ export default function TicketsDetail() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* ── Left column ── */}
         <div className="lg:col-span-2 space-y-6">
           <Card>
             <CardHeader>
@@ -428,6 +604,7 @@ export default function TicketsDetail() {
             </CardContent>
           </Card>
 
+          {/* Timeline: comments + SLA events */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="text-base flex items-center gap-2">
@@ -435,28 +612,34 @@ export default function TicketsDetail() {
                 Comentários ({comments.length})
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              {comments.length === 0 ? (
+            <CardContent className="space-y-3">
+              {timeline.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">
                   Nenhum comentário ainda
                 </p>
               ) : (
-                comments.map(c => (
-                  <div
-                    key={c.id}
-                    className={`border rounded-lg p-3 ${c.isInternal ? "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800" : ""}`}
-                    data-testid={`comment-${c.id}`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm font-medium">
-                        {c.authorName || c.authorEmail || "Sistema"}
-                        {c.isInternal && <Badge variant="outline" className="ml-2 text-xs">Interno</Badge>}
-                      </span>
-                      <span className="text-xs text-muted-foreground">{formatDate(c.createdAt)}</span>
+                timeline.map((item) => {
+                  if (item._kind === "sla_event") {
+                    return <SlaEventCard key={`ev-${item.id}`} event={item as TicketEventWithActor} />;
+                  }
+                  const c = item as CommentWithAuthor & { _kind: "comment"; _date: Date };
+                  return (
+                    <div
+                      key={c.id}
+                      className={`border rounded-lg p-3 ${c.isInternal ? "bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800" : ""}`}
+                      data-testid={`comment-${c.id}`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-medium">
+                          {c.authorName || c.authorEmail || "Sistema"}
+                          {c.isInternal && <Badge variant="outline" className="ml-2 text-xs">Interno</Badge>}
+                        </span>
+                        <span className="text-xs text-muted-foreground">{formatDate(c.createdAt)}</span>
+                      </div>
+                      <p className="text-sm whitespace-pre-wrap">{c.body}</p>
                     </div>
-                    <p className="text-sm whitespace-pre-wrap">{c.body}</p>
-                  </div>
-                ))
+                  );
+                })
               )}
 
               {canComment && (
@@ -502,6 +685,7 @@ export default function TicketsDetail() {
             </CardContent>
           </Card>
 
+          {/* Attachments */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="text-base flex items-center gap-2">
@@ -538,9 +722,7 @@ export default function TicketsDetail() {
             </CardHeader>
             <CardContent>
               {attachments.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">
-                  Nenhum anexo
-                </p>
+                <p className="text-sm text-muted-foreground text-center py-4">Nenhum anexo</p>
               ) : (
                 <div className="space-y-2">
                   {attachments.map(a => (
@@ -551,11 +733,7 @@ export default function TicketsDetail() {
                           {(a.sizeBytes / 1024).toFixed(1)} KB · {formatDate(a.createdAt)}
                         </p>
                       </div>
-                      <a
-                        href={`/api/tickets/${ticketId}/attachments/${a.id}/download`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
+                      <a href={`/api/tickets/${ticketId}/attachments/${a.id}/download`} target="_blank" rel="noopener noreferrer">
                         <Button variant="ghost" size="icon" data-testid={`download-${a.id}`}>
                           <Download className="h-4 w-4" />
                         </Button>
@@ -566,6 +744,8 @@ export default function TicketsDetail() {
               )}
             </CardContent>
           </Card>
+
+          {/* Checklist */}
           {checklist.length > 0 && (
             <Card>
               <CardHeader>
@@ -594,7 +774,9 @@ export default function TicketsDetail() {
           )}
         </div>
 
+        {/* ── Right column ── */}
         <div className="space-y-4">
+          {/* SLA */}
           {slaInfo && (
             <Card>
               <CardHeader>
@@ -621,6 +803,19 @@ export default function TicketsDetail() {
                   <span className="text-muted-foreground">Prazo resolução</span>
                   <div className="flex items-center gap-1">
                     <span className="text-xs">{formatDate(slaInfo.cycle.resolutionDueAt)}</span>
+                    {isManualDeadline && manualReason && (
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Info className="h-3 w-3 text-muted-foreground cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent side="left" className="max-w-48">
+                            <p className="font-medium text-xs">Motivo do ajuste:</p>
+                            <p className="text-xs">{manualReason}</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    )}
                     {isAdmin && (
                       <Button
                         variant="ghost"
@@ -655,6 +850,7 @@ export default function TicketsDetail() {
             </Card>
           )}
 
+          {/* Approval pending */}
           {ticket.status === "AGUARDANDO_APROVACAO" && (
             <Card className="border-purple-300 dark:border-purple-700">
               <CardHeader>
@@ -673,11 +869,7 @@ export default function TicketsDetail() {
                       <Button
                         size="sm"
                         className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                        onClick={() => {
-                          setApprovalAction("approve");
-                          setApprovalNote("");
-                          setApprovalDialogOpen(true);
-                        }}
+                        onClick={() => { setApprovalAction("approve"); setApprovalNote(""); setApprovalDialogOpen(true); }}
                         data-testid="button-approve-ticket"
                       >
                         <ShieldCheck className="h-4 w-4 mr-1" />
@@ -687,11 +879,7 @@ export default function TicketsDetail() {
                         size="sm"
                         variant="destructive"
                         className="flex-1"
-                        onClick={() => {
-                          setApprovalAction("reject");
-                          setApprovalNote("");
-                          setApprovalDialogOpen(true);
-                        }}
+                        onClick={() => { setApprovalAction("reject"); setApprovalNote(""); setApprovalDialogOpen(true); }}
                         data-testid="button-reject-ticket"
                       >
                         <XCircle className="h-4 w-4 mr-1" />
@@ -700,9 +888,7 @@ export default function TicketsDetail() {
                     </div>
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">
-                    Aguardando aprovador. SLA pausado.
-                  </p>
+                  <p className="text-sm text-muted-foreground">Aguardando aprovador. SLA pausado.</p>
                 )}
                 {approvalData?.approval?.status === "PENDING" && (
                   <Badge variant="secondary" className="bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200" data-testid="badge-approval-pending">
@@ -713,6 +899,7 @@ export default function TicketsDetail() {
             </Card>
           )}
 
+          {/* Approval result */}
           {(approvalData?.approval?.status === "APPROVED" || approvalData?.approval?.status === "REJECTED") && ticket.status !== "AGUARDANDO_APROVACAO" && (
             <Card>
               <CardHeader>
@@ -736,14 +923,13 @@ export default function TicketsDetail() {
                   <p className="text-muted-foreground">{approvalData.approval.decisionNote}</p>
                 )}
                 {approvalData.approval.decidedAt && (
-                  <p className="text-xs text-muted-foreground">
-                    {formatDate(approvalData.approval.decidedAt)}
-                  </p>
+                  <p className="text-xs text-muted-foreground">{formatDate(approvalData.approval.decidedAt)}</p>
                 )}
               </CardContent>
             </Card>
           )}
 
+          {/* Detalhes */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Detalhes</CardTitle>
@@ -751,7 +937,7 @@ export default function TicketsDetail() {
             <CardContent className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Requerente</span>
-                <span data-testid="text-requester">{ticket.creatorName} ({ticket.creatorEmail})</span>
+                <span className="text-right" data-testid="text-requester">{ticket.creatorName}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Setor origem</span>
@@ -766,19 +952,18 @@ export default function TicketsDetail() {
                 <span className="text-muted-foreground">Setor destino</span>
                 <span>{ticket.targetSectorName}</span>
               </div>
-              {ticket.assignees && ticket.assignees.length > 0 && (
-                <div>
-                  <span className="text-muted-foreground">Responsáveis</span>
-                  <div className="mt-1 space-y-1">
-                    {ticket.assignees.map(a => (
-                      <div key={a.userId} className="text-xs">{a.userName}</div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <Separator />
+              <AssigneesBlock
+                assignees={ticket.assignees || []}
+                isAdmin={!!isAdmin}
+                assignableUsers={assignableUsers}
+                onSave={(ids) => assignMutation.mutate(ids)}
+                isSaving={assignMutation.isPending}
+              />
             </CardContent>
           </Card>
 
+          {/* Request data */}
           {ticket.requestData && Object.keys(ticket.requestData).length > 0 && (
             <Card>
               <CardHeader>
@@ -795,13 +980,13 @@ export default function TicketsDetail() {
             </Card>
           )}
 
+          {/* Admin actions */}
           {isAdmin && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Ações Admin</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                {/* ── Quick actions ── */}
                 {ticket.status !== "RESOLVIDO" && ticket.status !== "CANCELADO" && (
                   <div className="space-y-2">
                     <Label className="text-xs text-muted-foreground uppercase tracking-wide">
@@ -825,15 +1010,10 @@ export default function TicketsDetail() {
                           size="sm"
                           variant="outline"
                           className="w-full"
-                          onClick={() => requestInfoMutation.mutate()}
-                          disabled={requestInfoMutation.isPending}
+                          onClick={() => setRequestInfoOpen(true)}
                           data-testid="button-request-info"
                         >
-                          {requestInfoMutation.isPending ? (
-                            <Loader2 className="h-4 w-4 animate-spin mr-1" />
-                          ) : (
-                            <HelpCircle className="h-4 w-4 mr-1" />
-                          )}
+                          <HelpCircle className="h-4 w-4 mr-1" />
                           Pedir informações
                         </Button>
                       )}
@@ -854,7 +1034,6 @@ export default function TicketsDetail() {
                   </div>
                 )}
 
-                {/* ── Status select ── */}
                 <div className="space-y-2">
                   <Label className="text-xs">Status</Label>
                   <Select
@@ -892,48 +1071,52 @@ export default function TicketsDetail() {
                     </SelectContent>
                   </Select>
                 </div>
-
-                <div className="space-y-2">
-                  <Label className="text-xs flex items-center gap-1">
-                    <Users className="h-3 w-3" />
-                    Responsáveis
-                  </Label>
-                  <div className="max-h-40 overflow-y-auto space-y-1 border rounded-lg p-2">
-                    {assignableUsers.map((u) => (
-                      <label key={u.id} className="flex items-center gap-2 text-sm cursor-pointer py-1">
-                        <Checkbox
-                          checked={selectedAssignees.includes(u.id)}
-                          onCheckedChange={(checked) => {
-                            setSelectedAssignees(prev =>
-                              checked ? [...prev, u.id] : prev.filter(id => id !== u.id)
-                            );
-                          }}
-                        />
-                        <span className="truncate">{u.name}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-full"
-                    onClick={() => assignMutation.mutate(selectedAssignees)}
-                    disabled={assignMutation.isPending}
-                    data-testid="button-save-assignees"
-                  >
-                    {assignMutation.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      "Salvar Responsáveis"
-                    )}
-                  </Button>
-                </div>
               </CardContent>
             </Card>
           )}
         </div>
       </div>
 
+      {/* Request-info modal */}
+      <Dialog open={requestInfoOpen} onOpenChange={setRequestInfoOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Pedir informações ao solicitante</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Quais informações estão faltando?</Label>
+              <Textarea
+                value={requestInfoMessage}
+                onChange={(e) => setRequestInfoMessage(e.target.value)}
+                placeholder="Descreva quais informações ou documentos são necessários..."
+                rows={4}
+                data-testid="input-request-info-message"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <Checkbox
+                checked={requestInfoMarkAwaiting}
+                onCheckedChange={(v) => setRequestInfoMarkAwaiting(v === true)}
+                data-testid="checkbox-mark-awaiting"
+              />
+              Marcar como "Aguardando Usuário" (pausa o SLA)
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRequestInfoOpen(false)}>Cancelar</Button>
+            <Button
+              onClick={() => requestInfoMutation.mutate()}
+              disabled={!requestInfoMessage.trim() || requestInfoMutation.isPending}
+              data-testid="button-confirm-request-info"
+            >
+              {requestInfoMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Enviar solicitação"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Approval dialog */}
       <Dialog open={approvalDialogOpen} onOpenChange={setApprovalDialogOpen}>
         <DialogContent>
           <DialogHeader>
@@ -970,6 +1153,7 @@ export default function TicketsDetail() {
         </DialogContent>
       </Dialog>
 
+      {/* Deadline dialog */}
       <Dialog open={deadlineDialogOpen} onOpenChange={setDeadlineDialogOpen}>
         <DialogContent>
           <DialogHeader>
@@ -986,7 +1170,7 @@ export default function TicketsDetail() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Motivo (opcional)</Label>
+              <Label>Motivo (obrigatório para auditoria)</Label>
               <Textarea
                 value={deadlineReason}
                 onChange={(e) => setDeadlineReason(e.target.value)}

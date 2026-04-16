@@ -293,7 +293,7 @@ export default function TicketsIndex() {
           value={priorityFilter}
           onValueChange={(v) => setPriorityFilter(v as Priority)}
         >
-          <SelectTrigger className="w-36" data-testid="select-priority-filter">
+          <SelectTrigger className="w-48 min-w-[12rem]" data-testid="select-priority-filter">
             <SelectValue placeholder="Prioridade" />
           </SelectTrigger>
           <SelectContent>

@@ -1,14 +1,32 @@
 import { useState } from "react";
-import { ArrowLeft, Download, FileText, Bell, Layout, Calendar } from "lucide-react";
+import {
+  ArrowLeft,
+  Download,
+  FileText,
+  Bell,
+  Layout,
+  Calendar,
+  Loader2,
+  Package,
+} from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 
 async function downloadReport(url: string, filename: string) {
   const res = await fetch(url, { credentials: "include" });
-  if (!res.ok) throw new Error("Falha ao gerar relatório");
+  if (!res.ok) {
+    let msg = "Falha ao gerar relatório";
+    try {
+      const body = await res.json();
+      if (body?.error) msg = body.error;
+    } catch {}
+    throw new Error(msg);
+  }
   const blob = await res.blob();
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -25,6 +43,7 @@ export default function AdminReports() {
   const [ticketTo, setTicketTo] = useState("");
   const [notifFrom, setNotifFrom] = useState("");
   const [notifTo, setNotifTo] = useState("");
+  const [includeInactive, setIncludeInactive] = useState(false);
   const [loading, setLoading] = useState<string | null>(null);
 
   const handleExport = async (type: string, format: "csv" | "json") => {
@@ -40,167 +59,186 @@ export default function AdminReports() {
         if (notifFrom) url += `&from=${notifFrom}`;
         if (notifTo) url += `&to=${notifTo}`;
       }
+      if (type === "resources" && includeInactive) {
+        url += `&includeInactive=true`;
+      }
       const ext = format === "csv" ? "csv" : "json";
       await downloadReport(url, `${type}_report.${ext}`);
-      toast({ title: "Exportado", description: `Relatório de ${type} baixado com sucesso.` });
-    } catch {
-      toast({ title: "Erro", description: "Falha ao exportar relatório.", variant: "destructive" });
+      toast({ title: "Exportado com sucesso", description: `Relatório de ${type} baixado.` });
+    } catch (err: any) {
+      toast({
+        title: "Falha ao exportar",
+        description: err?.message || "Erro desconhecido",
+        variant: "destructive",
+      });
     } finally {
       setLoading(null);
     }
   };
 
+  function DateRangeRow({
+    fromValue, onFromChange, toValue, onToChange,
+    fromId, toId,
+  }: {
+    fromValue: string; onFromChange: (v: string) => void;
+    toValue: string; onToChange: (v: string) => void;
+    fromId: string; toId: string;
+  }) {
+    return (
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor={fromId} className="text-xs text-muted-foreground flex items-center gap-1">
+            <Calendar className="h-3 w-3" /> De
+          </Label>
+          <Input
+            id={fromId}
+            type="date"
+            value={fromValue}
+            onChange={(e) => onFromChange(e.target.value)}
+            className="w-40"
+            data-testid={`input-${fromId}`}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={toId} className="text-xs text-muted-foreground">Até</Label>
+          <Input
+            id={toId}
+            type="date"
+            value={toValue}
+            onChange={(e) => onToChange(e.target.value)}
+            className="w-40"
+            data-testid={`input-${toId}`}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  function ExportButtons({ type, loadingKey }: { type: string; loadingKey: string }) {
+    return (
+      <div className="flex gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => handleExport(type, "csv")}
+          disabled={loading === `${type}-csv`}
+          data-testid={`button-export-${loadingKey}-csv`}
+        >
+          {loading === `${type}-csv` ? (
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+          ) : (
+            <Download className="h-4 w-4 mr-2" />
+          )}
+          CSV
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => handleExport(type, "json")}
+          disabled={loading === `${type}-json`}
+          data-testid={`button-export-${loadingKey}-json`}
+        >
+          {loading === `${type}-json` ? (
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+          ) : (
+            <Download className="h-4 w-4 mr-2" />
+          )}
+          JSON
+        </Button>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6 p-6 max-w-3xl">
+      {/* Header */}
       <div className="flex items-center gap-3">
         <Link href="/admin">
           <Button variant="ghost" size="icon" data-testid="button-back">
             <ArrowLeft className="h-4 w-4" />
           </Button>
         </Link>
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-chart-5/10">
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-chart-5/10 shrink-0">
           <Download className="h-5 w-5 text-chart-5" />
         </div>
         <div>
-          <h1 className="text-xl font-semibold text-foreground" data-testid="text-reports-title">Relatórios</h1>
-          <p className="text-sm text-muted-foreground">Exporte dados em CSV ou JSON</p>
+          <h1 className="text-xl font-semibold text-foreground" data-testid="text-reports-title">
+            Relatórios
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Exporte dados do sistema em CSV ou JSON
+          </p>
         </div>
       </div>
 
-      <div className="grid gap-6">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base font-medium">
-              <FileText className="h-4 w-4" />
-              Chamados
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center gap-3 flex-wrap">
-              <div className="flex items-center gap-2">
-                <Calendar className="h-4 w-4 text-muted-foreground" />
-                <Input
-                  type="date"
-                  value={ticketFrom}
-                  onChange={(e) => setTicketFrom(e.target.value)}
-                  className="w-40"
-                  data-testid="input-ticket-from"
-                />
-              </div>
-              <span className="text-sm text-muted-foreground">até</span>
-              <Input
-                type="date"
-                value={ticketTo}
-                onChange={(e) => setTicketTo(e.target.value)}
-                className="w-40"
-                data-testid="input-ticket-to"
-              />
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                onClick={() => handleExport("tickets", "csv")}
-                disabled={loading === "tickets-csv"}
-                data-testid="button-export-tickets-csv"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Exportar CSV
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => handleExport("tickets", "json")}
-                disabled={loading === "tickets-json"}
-                data-testid="button-export-tickets-json"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Exportar JSON
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Chamados */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <FileText className="h-4 w-4 text-primary" />
+            Chamados
+          </CardTitle>
+          <CardDescription>
+            Exporta todos os chamados com status, prioridade, categoria e SLA.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <DateRangeRow
+            fromValue={ticketFrom} onFromChange={setTicketFrom}
+            toValue={ticketTo} onToChange={setTicketTo}
+            fromId="ticket-from" toId="ticket-to"
+          />
+          <ExportButtons type="tickets" loadingKey="tickets" />
+        </CardContent>
+      </Card>
 
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base font-medium">
-              <Layout className="h-4 w-4" />
-              Recursos / Apps
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                onClick={() => handleExport("resources", "csv")}
-                disabled={loading === "resources-csv"}
-                data-testid="button-export-resources-csv"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Exportar CSV
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => handleExport("resources", "json")}
-                disabled={loading === "resources-json"}
-                data-testid="button-export-resources-json"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Exportar JSON
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Recursos / Apps */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Package className="h-4 w-4 text-primary" />
+            Recursos / Apps
+          </CardTitle>
+          <CardDescription>
+            Exporta apps e dashboards cadastrados, com setor e status.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Switch
+              id="include-inactive"
+              checked={includeInactive}
+              onCheckedChange={setIncludeInactive}
+              data-testid="switch-include-inactive"
+            />
+            <Label htmlFor="include-inactive" className="text-sm cursor-pointer">
+              Incluir inativos
+            </Label>
+          </div>
+          <ExportButtons type="resources" loadingKey="resources" />
+        </CardContent>
+      </Card>
 
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base font-medium">
-              <Bell className="h-4 w-4" />
-              Notificações
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center gap-3 flex-wrap">
-              <div className="flex items-center gap-2">
-                <Calendar className="h-4 w-4 text-muted-foreground" />
-                <Input
-                  type="date"
-                  value={notifFrom}
-                  onChange={(e) => setNotifFrom(e.target.value)}
-                  className="w-40"
-                  data-testid="input-notif-from"
-                />
-              </div>
-              <span className="text-sm text-muted-foreground">até</span>
-              <Input
-                type="date"
-                value={notifTo}
-                onChange={(e) => setNotifTo(e.target.value)}
-                className="w-40"
-                data-testid="input-notif-to"
-              />
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                onClick={() => handleExport("notifications", "csv")}
-                disabled={loading === "notifications-csv"}
-                data-testid="button-export-notif-csv"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Exportar CSV
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => handleExport("notifications", "json")}
-                disabled={loading === "notifications-json"}
-                data-testid="button-export-notif-json"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Exportar JSON
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Notificações */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Bell className="h-4 w-4 text-primary" />
+            Notificações
+          </CardTitle>
+          <CardDescription>
+            Exporta notificações enviadas, com destinatário e status de leitura.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <DateRangeRow
+            fromValue={notifFrom} onFromChange={setNotifFrom}
+            toValue={notifTo} onToChange={setNotifTo}
+            fromId="notif-from" toId="notif-to"
+          />
+          <ExportButtons type="notifications" loadingKey="notif" />
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -1554,11 +1554,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { resolutionDueAtManual, resolutionDueAtManualReason, ...ticketPatch } = parsed.data;
 
       if (resolutionDueAtManual) {
+        // Fetch old deadline for the event record
+        const ticketBefore = await storage.getTicketDetail(req.params.id, req.user!);
+        const oldDeadline = ticketBefore?.currentCycle?.resolutionDueAt ?? null;
         await storage.updateSlaCycleDeadline(req.params.id, {
           resolutionDueAt: new Date(resolutionDueAtManual),
           reason: resolutionDueAtManualReason,
           updatedBy: req.user!.id,
         });
+        // Record a sla_deadline_changed event visible in the timeline
+        await pool.query(
+          `INSERT INTO ticket_events (id, ticket_id, actor_user_id, type, data, created_at)
+           VALUES (gen_random_uuid(), $1, $2, 'sla_deadline_changed', $3, NOW())`,
+          [
+            req.params.id,
+            req.user!.id,
+            JSON.stringify({
+              field: "resolutionDueAt",
+              from: oldDeadline ? new Date(oldDeadline).toISOString() : null,
+              to: new Date(resolutionDueAtManual).toISOString(),
+              note: resolutionDueAtManualReason || null,
+            }),
+          ]
+        );
       }
 
       const updated = await storage.adminUpdateTicket(req.params.id, ticketPatch, req.user!);
@@ -1653,6 +1671,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (error) {
       console.error("Error fetching comments:", error);
       res.status(500).json({ error: "Failed to fetch comments" });
+    }
+  });
+
+  app.get("/api/tickets/:id/events", requireAuth, async (req, res) => {
+    try {
+      const ticketId = req.params.id as string;
+      const ticket = await storage.getTicketDetail(ticketId, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+      const events = await storage.listTicketEvents(ticketId);
+      // Only expose sla_deadline_changed events to all; other system events are internal
+      const filtered = events.filter(e => e.type === "sla_deadline_changed");
+      res.json(filtered);
+    } catch (error) {
+      console.error("Error fetching ticket events:", error);
+      res.status(500).json({ error: "Failed to fetch events" });
     }
   });
 
@@ -1819,39 +1852,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/tickets/:id/request-info", requireAuth, requireAdmin, async (req, res) => {
     try {
+      const bodySchema = z.object({
+        message: z.string().min(1).max(2000),
+        markAwaiting: z.boolean().default(true),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+      }
+      const { message, markAwaiting } = parsed.data;
+
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);
       if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
 
-      const requirements = await storage.getTicketAttachmentRequirements(req.params.id);
-      const missingReqs = requirements.filter(r => r.required && !r.satisfied);
-
-      const allCats = await storage.listAllTicketCategories();
-      const category = allCats.find(c => c.id === ticket.categoryId);
-      const formSchema = (category as any)?.formSchema || [];
-      const reqData = ticket.requestData || {};
-      const missingFields = formSchema
-        .filter((f: any) => f.required && (!reqData[f.key] || (typeof reqData[f.key] === "string" && !reqData[f.key].trim())))
-        .map((f: any) => f.label);
-
-      const missingItems: string[] = [];
-      if (missingReqs.length > 0) missingItems.push(...missingReqs.map(r => r.label));
-      if (missingFields.length > 0) missingItems.push(...missingFields);
-
-      if (missingItems.length === 0) {
-        return res.status(400).json({ error: "Nenhuma informação pendente detectada" });
-      }
-
-      if (ticket.status !== "AGUARDANDO_USUARIO") {
+      if (markAwaiting && ticket.status !== "AGUARDANDO_USUARIO") {
         await storage.adminUpdateTicket(req.params.id, { status: "AGUARDANDO_USUARIO" }, req.user!);
       }
 
-      const commentBody = `Informações pendentes:\n${missingItems.map(i => `• ${i}`).join("\n")}`;
-      await storage.addTicketComment(req.params.id, req.user!, {
+      const commentBody = `📌 Solicitação de informações: ${message}`;
+      const comment = await storage.addTicketComment(req.params.id, req.user!, {
         body: commentBody,
         isInternal: false,
       });
 
-      res.json({ message: "Status alterado para Aguardando Usuário", missing: missingItems });
+      res.json({ message: markAwaiting ? "Status alterado para Aguardando Usuário" : "Solicitação registrada", comment });
     } catch (error) {
       console.error("Error requesting info:", error);
       res.status(500).json({ error: "Failed to request info" });
@@ -2818,21 +2842,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/admin/reports/resources", requireAuth, requireAdmin, async (req, res) => {
     try {
-      const format = (req.query.format as string) || "json";
+      const formatRaw = Array.isArray(req.query.format) ? req.query.format[0] : req.query.format;
+      const format = (formatRaw as string | undefined) || "csv";
+      const includeInactive = req.query.includeInactive === "true";
+
+      if (format !== "csv" && format !== "json") {
+        return res.status(400).json({ error: "Formato inválido. Use csv ou json." });
+      }
+
+      const where = includeInactive ? "" : "WHERE is_active = true";
       const result = await pool.query(
-        `SELECT id as "resourceId", name, type, url, updated_at as "updatedAt"
-         FROM resources ORDER BY name`
+        `SELECT r.id as "resourceId", r.name, r.type, r.url, r.is_active as "isActive",
+                s.name as "sectorName", r.created_at as "createdAt"
+         FROM resources r
+         LEFT JOIN sectors s ON r.sector_id = s.id
+         ${where}
+         ORDER BY r.name`
       );
       const rows = result.rows.map((r: any) => ({
         resourceId: r.resourceId,
         name: r.name,
         type: r.type,
         url: r.url || "",
-        updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : "",
+        sectorName: r.sectorName || "",
+        isActive: r.isActive ? "Sim" : "Não",
+        createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : "",
       }));
 
       if (format === "csv") {
-        const headers = ["resourceId", "name", "type", "url", "updatedAt"];
+        const headers = ["resourceId", "name", "type", "url", "sectorName", "isActive", "createdAt"];
         const csv = toCsv(headers, rows);
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", 'attachment; filename="resources_report.csv"');
@@ -2866,7 +2904,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         `SELECT n.id, n.type, u.name as "recipientName", n.is_read as "isRead",
                 n.created_at as "createdAt", n.link_url as "linkUrl"
          FROM notifications n
-         LEFT JOIN users u ON n.user_id = u.id
+         LEFT JOIN users u ON n.recipient_user_id = u.id
          WHERE 1=1 ${whereClause}
          ORDER BY n.created_at DESC`,
         params

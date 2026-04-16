@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useLocation, Link } from "wouter";
 import {
   Home,
@@ -9,6 +10,13 @@ import {
   User,
   Ticket,
   Keyboard,
+  ChevronRight,
+  Users,
+  FileText,
+  Search,
+  Puzzle,
+  BarChart2,
+  Package,
 } from "lucide-react";
 import { ThemeLogo } from "@/components/theme-logo";
 import {
@@ -22,7 +30,15 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
@@ -34,24 +50,29 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-const mainMenuItems = [
-  { title: "Home", url: "/", icon: Home },
-  { title: "Apps", url: "/apps", icon: LayoutGrid },
-  { title: "Dashboards", url: "/dashboards", icon: BarChart3 },
-  { title: "Chamados", url: "/tickets", icon: Ticket },
-  { title: "Digitação", url: "/typing", icon: Keyboard },
-  { title: "Favoritos", url: "/favorites", icon: Star },
+const adminSubItems = [
+  { title: "Usuários", url: "/admin/users", icon: Users },
+  { title: "Configurações de Chamados", url: "/admin/tickets-settings", icon: FileText },
+  { title: "Auditoria", url: "/admin/audit", icon: Search },
+  { title: "Integrações", url: "/admin/notifications", icon: Puzzle },
+  { title: "Relatórios", url: "/admin/reports", icon: BarChart2 },
 ];
 
-const adminMenuItems = [
-  { title: "Configurações", url: "/admin", icon: Settings },
+const recursosSubItems = [
+  { title: "Apps", url: "/apps", icon: LayoutGrid },
+  { title: "Dashboards", url: "/dashboards", icon: BarChart3 },
+  { title: "Favoritos", url: "/favorites", icon: Star },
 ];
 
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout, isAuthenticated } = useAuth();
-
   const isAdmin = user?.isAdmin;
+
+  const [recursosOpen, setRecursosOpen] = useState(
+    ["/apps", "/dashboards", "/favorites"].some(p => location.startsWith(p))
+  );
+  const [adminOpen, setAdminOpen] = useState(location.startsWith("/admin"));
 
   const getInitials = (name: string) => {
     return name
@@ -75,47 +96,145 @@ export function AppSidebar() {
           <SidebarGroupLabel>Menu Principal</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {mainMenuItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={item.url === "/" ? location === "/" : location.startsWith(item.url)}
-                    data-testid={`nav-${item.title.toLowerCase()}`}
-                  >
-                    <Link href={item.url}>
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
+              {/* Visão geral */}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={location === "/"}
+                  data-testid="nav-home"
+                >
+                  <Link href="/">
+                    <Home className="h-4 w-4" />
+                    <span>Visão geral</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+
+              {/* Recursos (collapsible) */}
+              <Collapsible open={recursosOpen} onOpenChange={setRecursosOpen}>
+                <SidebarMenuItem>
+                  <CollapsibleTrigger asChild>
+                    <SidebarMenuButton
+                      isActive={recursosSubItems.some(i => location.startsWith(i.url))}
+                      data-testid="nav-recursos"
+                    >
+                      <Package className="h-4 w-4" />
+                      <span>Recursos</span>
+                      <ChevronRight
+                        className={`ml-auto h-4 w-4 transition-transform ${recursosOpen ? "rotate-90" : ""}`}
+                      />
+                    </SidebarMenuButton>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <SidebarMenuSub>
+                      {recursosSubItems.map((item) => (
+                        <SidebarMenuSubItem key={item.title}>
+                          <SidebarMenuSubButton
+                            asChild
+                            isActive={location.startsWith(item.url)}
+                            data-testid={`nav-${item.title.toLowerCase()}`}
+                          >
+                            <Link href={item.url}>
+                              <item.icon className="h-3.5 w-3.5" />
+                              <span>{item.title}</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
+                    </SidebarMenuSub>
+                  </CollapsibleContent>
                 </SidebarMenuItem>
-              ))}
+              </Collapsible>
+
+              {/* Chamados */}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={location.startsWith("/tickets")}
+                  data-testid="nav-chamados"
+                >
+                  <Link href="/tickets">
+                    <Ticket className="h-4 w-4" />
+                    <span>Chamados</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+
+              {/* Digitação */}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={location.startsWith("/typing")}
+                  data-testid="nav-digitação"
+                >
+                  <Link href="/typing">
+                    <Keyboard className="h-4 w-4" />
+                    <span>Digitação</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {isAdmin && (
-          <SidebarGroup>
-            <SidebarGroupLabel>Configurações</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {adminMenuItems.map((item) => (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton
-                      asChild
-                      isActive={location.startsWith(item.url)}
-                      data-testid={`nav-${item.title.toLowerCase()}`}
-                    >
-                      <Link href={item.url}>
-                        <item.icon className="h-4 w-4" />
-                        <span>{item.title}</span>
-                      </Link>
-                    </SidebarMenuButton>
+        <SidebarGroup>
+          <SidebarGroupLabel>Configurações</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {/* Perfil */}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={location.startsWith("/profile")}
+                  data-testid="nav-perfil"
+                >
+                  <Link href="/profile">
+                    <User className="h-4 w-4" />
+                    <span>Perfil</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+
+              {/* Admin submenu */}
+              {isAdmin && (
+                <Collapsible open={adminOpen} onOpenChange={setAdminOpen}>
+                  <SidebarMenuItem>
+                    <CollapsibleTrigger asChild>
+                      <SidebarMenuButton
+                        isActive={location.startsWith("/admin")}
+                        data-testid="nav-admin"
+                      >
+                        <Settings className="h-4 w-4" />
+                        <span>Admin</span>
+                        <ChevronRight
+                          className={`ml-auto h-4 w-4 transition-transform ${adminOpen ? "rotate-90" : ""}`}
+                        />
+                      </SidebarMenuButton>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <SidebarMenuSub>
+                        {adminSubItems.map((item) => (
+                          <SidebarMenuSubItem key={item.title}>
+                            <SidebarMenuSubButton
+                              asChild
+                              isActive={location === item.url || (item.url === "/admin/tickets-settings" && location.startsWith("/admin/tickets"))}
+                              data-testid={`nav-admin-${item.title.toLowerCase().replace(/\s+/g, "-")}`}
+                            >
+                              <Link href={item.url}>
+                                <item.icon className="h-3.5 w-3.5" />
+                                <span>{item.title}</span>
+                              </Link>
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
+                        ))}
+                      </SidebarMenuSub>
+                    </CollapsibleContent>
                   </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
+                </Collapsible>
+              )}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border p-4">

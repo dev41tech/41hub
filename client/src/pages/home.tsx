@@ -300,6 +300,7 @@ export default function Home() {
                 resource={resource}
                 onOpen={handleOpenResource}
                 onToggleFavorite={handleToggleFavorite}
+                isAdmin={user?.isAdmin === true}
               />
             ))}
           </div>

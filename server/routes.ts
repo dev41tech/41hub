@@ -32,7 +32,7 @@ const MAX_LOGIN_ATTEMPTS = 10;
 const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
 
 // Configure multer for photo uploads
-const uploadDir = path.join(process.cwd(), "uploads");
+const uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -190,6 +190,20 @@ function canCoordinatorManageSector(user: UserWithRoles, sectorId: string): bool
   return user.roles?.some(r => r.roleName === "Coordenador" && r.sectorId === sectorId) || false;
 }
 
+// Ticket access: deny for plain "Usuario" role (Admin and Coordenador can access)
+async function requireTicketAccess(req: Request, res: Response, next: NextFunction) {
+  if (!req.user) return next();
+  const roles = req.user.roles?.map((r: any) => r.roleName) ?? [];
+  const hasTicketAccess = req.user.isAdmin || roles.includes("Coordenador");
+  if (!hasTicketAccess) {
+    return res.status(403).json({
+      error: "Acesso negado: role Usuario não tem acesso a chamados",
+      code: "TICKET_ACCESS_DENIED",
+    });
+  }
+  next();
+}
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   // ── Startup diagnostics log ──────────────────────────────────────────────
   try {
@@ -244,6 +258,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ADD COLUMN IF NOT EXISTS health_message TEXT,
       ADD COLUMN IF NOT EXISTS health_updated_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS health_updated_by VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL`);
+
+    // api_tokens table for integration token management
+    await pool.query(`CREATE TABLE IF NOT EXISTS api_tokens (
+      id            VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+      name          VARCHAR(120) NOT NULL,
+      token_hash    VARCHAR(255) NOT NULL,
+      scopes        TEXT[] NOT NULL DEFAULT ARRAY['read']::text[],
+      created_by    VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      revoked_at    TIMESTAMPTZ
+    )`);
 
     console.info("[startup] Schema bootstrap OK");
   } catch (e: any) {
@@ -755,18 +780,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Serve uploaded files (authenticated)
   app.get("/api/uploads/:filename", requireAuth, (req, res) => {
-    const filename = req.params.filename;
-    const filePath = path.join(uploadDir, filename);
-
-    // Security: prevent directory traversal
-    if (filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
+    // Use basename to strip any directory components — prevents path traversal
+    const safeName = path.basename(req.params.filename);
+    if (!safeName || safeName.startsWith(".")) {
       return res.status(400).json({ error: "Invalid filename" });
     }
-
+    const filePath = path.join(uploadDir, safeName);
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: "File not found" });
     }
-
     res.sendFile(filePath);
   });
 
@@ -968,7 +990,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // --- Sectors ---
+  // --- Sectors (public — scoped by role) ---
+  app.get("/api/sectors", requireAuth, async (req, res) => {
+    try {
+      const allSectors = await storage.getAllSectors();
+      if (req.user!.isAdmin) return res.json(allSectors);
+      // Non-admin: only sectors the user belongs to
+      const userSectorIds = new Set(
+        (req.user!.roles ?? []).map((r: any) => r.sectorId).filter(Boolean)
+      );
+      return res.json(allSectors.filter((s: any) => userSectorIds.has(s.id)));
+    } catch (error) {
+      console.error("Error fetching sectors:", error);
+      res.status(500).json({ error: "Failed to fetch sectors" });
+    }
+  });
+
+  // --- Sectors (admin full CRUD) ---
   app.get("/api/admin/sectors", requireAuth, requireAdmin, async (req, res) => {
     try {
       const sectors = await storage.getAllSectors();
@@ -1383,7 +1421,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ==================== TICKET ROUTES ====================
 
-  app.get("/api/tickets/categories", requireAuth, async (req, res) => {
+  app.get("/api/tickets/categories", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const categories = await storage.listTicketCategoriesActive();
       res.json(categories);
@@ -1393,7 +1431,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/tickets", requireAuth, async (req, res) => {
+  app.get("/api/tickets", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const filters = {
         status: req.query.status as string | undefined,
@@ -1604,7 +1642,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/tickets/:id", requireAuth, async (req, res) => {
+  app.get("/api/tickets/:id", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);
       if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
@@ -1745,7 +1783,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/tickets/:id/comments", requireAuth, async (req, res) => {
+  app.get("/api/tickets/:id/comments", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);
       if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
@@ -1757,7 +1795,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/tickets/:id/events", requireAuth, async (req, res) => {
+  app.get("/api/tickets/:id/events", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const ticketId = req.params.id as string;
       const ticket = await storage.getTicketDetail(ticketId, req.user!);
@@ -1772,7 +1810,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/tickets/:id/comments", requireAuth, async (req, res) => {
+  app.post("/api/tickets/:id/comments", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const isUser = !req.user!.isAdmin && !req.user!.roles?.some(r => r.roleName === "Coordenador");
       if (isUser) {
@@ -1829,7 +1867,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/tickets/:id/attachments", requireAuth, async (req, res) => {
+  app.get("/api/tickets/:id/attachments", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);
       if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
@@ -1841,7 +1879,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/tickets/:id/attachments", requireAuth, ticketUpload.single("file"), async (req, res) => {
+  app.post("/api/tickets/:id/attachments", requireAuth, requireTicketAccess, ticketUpload.single("file"), async (req, res) => {
     try {
       const isUser = !req.user!.isAdmin && !req.user!.roles?.some(r => r.roleName === "Coordenador");
       if (isUser) {
@@ -1867,7 +1905,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/tickets/:id/attachments/:attachmentId/download", requireAuth, async (req, res) => {
+  app.get("/api/tickets/:id/attachments/:attachmentId/download", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);
       if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
@@ -1894,7 +1932,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/tickets/:id/attachments/requirements", requireAuth, async (req, res) => {
+  app.get("/api/tickets/:id/attachments/requirements", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);
       if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
@@ -1906,7 +1944,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.get("/api/tickets/:id/checklist", requireAuth, async (req, res) => {
+  app.get("/api/tickets/:id/checklist", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);
       if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
@@ -1967,7 +2005,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ==================== TICKET APPROVAL ROUTES ====================
 
-  app.get("/api/tickets/:id/approval", requireAuth, async (req, res) => {
+  app.get("/api/tickets/:id/approval", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);
       if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
@@ -2000,7 +2038,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/tickets/:id/approve", requireAuth, async (req, res) => {
+  app.post("/api/tickets/:id/approve", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);
       if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
@@ -2080,7 +2118,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.post("/api/tickets/:id/reject", requireAuth, async (req, res) => {
+  app.post("/api/tickets/:id/reject", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);
       if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
@@ -3149,25 +3187,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       );
       const alert = result.rows[0];
 
-      // Generate notifications for all active users if alert is active
+      // Respond immediately — side-effects (notifications, audit) are best-effort
+      res.status(201).json(alert);
+
+      // Side-effects after response — failures logged but do not affect client
+      const sideEffects: Promise<any>[] = [];
       if (parsed.data.isActive) {
-        await pool.query(
-          `INSERT INTO notifications (id, recipient_user_id, type, title, message, link_url, created_at)
-           SELECT gen_random_uuid(), u.id, 'alert', $1, $2, '/alerts', NOW()
-           FROM users u WHERE u.is_active = true AND u.id != $3`,
-          [parsed.data.title, parsed.data.message, req.user!.id]
+        sideEffects.push(
+          pool.query(
+            `INSERT INTO notifications (id, recipient_user_id, type, title, message, link_url, created_at)
+             SELECT gen_random_uuid(), u.id, 'alert', $1, $2, '/alerts', NOW()
+             FROM users u WHERE u.is_active = true AND u.id != $3`,
+            [parsed.data.title, parsed.data.message, req.user!.id]
+          )
         );
       }
-
-      await storage.createAuditLog({
-        actorUserId: req.user!.id,
-        action: "alert_create",
-        targetType: "system_alert",
-        targetId: alert.id,
-        metadata: { title: parsed.data.title, severity: parsed.data.severity } as any,
-        ip: req.ip || req.socket.remoteAddress,
+      sideEffects.push(
+        storage.createAuditLog({
+          actorUserId: req.user!.id,
+          action: "alert_create",
+          targetType: "system_alert",
+          targetId: alert.id,
+          metadata: { title: parsed.data.title, severity: parsed.data.severity } as any,
+          ip: req.ip || req.socket.remoteAddress,
+        })
+      );
+      Promise.allSettled(sideEffects).then((results) => {
+        results.forEach((r, i) => {
+          if (r.status === "rejected") {
+            console.error(`[admin/alerts POST] side-effect[${i}] failed:`, r.reason?.message ?? r.reason);
+          }
+        });
       });
-      res.status(201).json(alert);
     } catch (error: any) {
       console.error("[admin/alerts POST] code=%s msg=%s", error?.code, error?.message, error?.stack);
       if (error?.code === "42P01") {

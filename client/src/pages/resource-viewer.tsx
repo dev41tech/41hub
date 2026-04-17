@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
-import { ArrowLeft, ExternalLink, Star, AlertCircle, Monitor, Layout } from "lucide-react";
+import { ArrowLeft, ExternalLink, Star, AlertCircle, Monitor, Layout, AlertTriangle, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -9,7 +9,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/theme-provider";
+import { useAuth } from "@/lib/auth-context";
 import type { ResourceWithHealth } from "@shared/schema";
+import { effectiveHealth } from "@shared/schema";
 
 type OpenBehavior = "HUB_ONLY" | "NEW_TAB_ONLY" | "BOTH";
 
@@ -54,6 +56,8 @@ export default function ResourceViewer() {
   const [, setLocation] = useLocation();
   const resourceId = params?.id;
   const { theme } = useTheme();
+  const { user } = useAuth();
+  const isAdmin = user?.isAdmin === true;
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   const { data: resource, isLoading, error } = useQuery<ResourceWithHealth>({
@@ -183,20 +187,43 @@ export default function ResourceViewer() {
   );
 
   const renderContent = () => {
-    if (resource.healthStatus === "DOWN") {
+    const health = effectiveHealth(resource);
+    const hasIssue = health === "DOWN" || health === "DEGRADED";
+
+    if (hasIssue && !isAdmin) {
+      const isDown = health === "DOWN";
       return (
         <div className="flex flex-col items-center justify-center h-full p-6">
           <Card className="max-w-md w-full">
             <CardContent className="flex flex-col items-center gap-4 p-6 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10">
-                <AlertCircle className="h-6 w-6 text-destructive" />
+              <div className={cn(
+                "flex h-12 w-12 items-center justify-center rounded-full",
+                isDown ? "bg-destructive/10" : "bg-amber-500/10"
+              )}>
+                {isDown ? (
+                  <AlertTriangle className="h-6 w-6 text-destructive" />
+                ) : (
+                  <Wrench className="h-6 w-6 text-amber-500" />
+                )}
               </div>
               <div>
-                <h2 className="text-lg font-semibold">Recurso indisponível</h2>
+                <h2 className="text-lg font-semibold">
+                  {isDown ? "Recurso fora do ar" : "Recurso em manutenção"}
+                </h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Este recurso está temporariamente fora do ar. Por favor, tente novamente mais tarde.
+                  {resource.healthMessage
+                    ? resource.healthMessage
+                    : isDown
+                    ? "Este recurso está temporariamente fora do ar. Por favor, tente novamente mais tarde."
+                    : "Este recurso está em manutenção no momento."}
                 </p>
               </div>
+              <Button
+                variant="outline"
+                onClick={() => setLocation("/alerts")}
+              >
+                Ver alertas
+              </Button>
             </CardContent>
           </Card>
         </div>
@@ -359,11 +386,11 @@ export default function ResourceViewer() {
               <div
                 className={cn(
                   "h-2 w-2 rounded-full",
-                  getStatusColor(resource.healthStatus)
+                  getStatusColor(effectiveHealth(resource))
                 )}
               />
               <span className="text-xs text-muted-foreground">
-                {getStatusText(resource.healthStatus)}
+                {getStatusText(effectiveHealth(resource))}
               </span>
             </div>
           </div>

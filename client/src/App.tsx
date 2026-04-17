@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { ShieldOff } from "lucide-react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -54,6 +55,28 @@ import AdminIntegrations from "@/pages/admin/integrations";
 import Kb from "@/pages/kb";
 import KbArticle from "@/pages/kb-article";
 
+function TicketAccessDenied() {
+  return (
+    <div className="flex flex-col items-center justify-center h-full p-12 gap-4 text-center">
+      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
+        <ShieldOff className="h-8 w-8 text-destructive" />
+      </div>
+      <h2 className="text-xl font-semibold">Acesso não autorizado</h2>
+      <p className="text-muted-foreground max-w-sm">
+        Seu perfil de acesso (Usuário) não permite visualizar ou criar chamados.
+        Entre em contato com um Administrador se precisar de acesso.
+      </p>
+    </div>
+  );
+}
+
+function TicketGuard({ component: Component }: { component: React.ComponentType }) {
+  const { user } = useAuth();
+  const isUsuarioOnly = user && !user.isAdmin && !(user.roles?.some((r: any) => r.roleName === "Coordenador"));
+  if (isUsuarioOnly) return <TicketAccessDenied />;
+  return <Component />;
+}
+
 function Router() {
   return (
     <Switch>
@@ -63,9 +86,9 @@ function Router() {
       <Route path="/favorites" component={Favorites} />
       <Route path="/profile" component={Profile} />
       <Route path="/resource/:id" component={ResourceViewer} />
-      <Route path="/tickets" component={TicketsIndex} />
-      <Route path="/tickets/new" component={TicketsNew} />
-      <Route path="/tickets/:id" component={TicketsDetail} />
+      <Route path="/tickets" component={() => <TicketGuard component={TicketsIndex} />} />
+      <Route path="/tickets/new" component={() => <TicketGuard component={TicketsNew} />} />
+      <Route path="/tickets/:id" component={() => <TicketGuard component={TicketsDetail} />} />
       <Route path="/typing" component={TypingTest} />
       <Route path="/typing/leaderboard" component={TypingLeaderboard} />
       <Route path="/admin" component={AdminIndex} />

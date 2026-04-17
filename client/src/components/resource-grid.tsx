@@ -9,6 +9,7 @@ interface ResourceGridProps {
   onToggleFavorite: (resourceId: string, isFavorite: boolean) => void;
   showSector?: boolean;
   emptyMessage?: string;
+  isAdmin?: boolean;
 }
 
 export function ResourceGrid({
@@ -18,6 +19,7 @@ export function ResourceGrid({
   onToggleFavorite,
   showSector = true,
   emptyMessage = "Nenhum recurso encontrado",
+  isAdmin = false,
 }: ResourceGridProps) {
   if (isLoading) {
     return (
@@ -61,6 +63,7 @@ export function ResourceGrid({
           onOpen={onOpen}
           onToggleFavorite={onToggleFavorite}
           showSector={showSector}
+          isAdmin={isAdmin}
         />
       ))}
     </div>

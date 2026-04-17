@@ -20,7 +20,8 @@
       "Bash(awk '{if \\($1 > 2942\\) print $1}')",
       "Bash(where node:*)",
       "Bash(\"C:\\\\nvm4w\\\\nodejs\\\\npx.cmd\" tsc:*)",
-      "Bash(node node_modules/typescript/bin/tsc --noEmit)"
+      "Bash(node node_modules/typescript/bin/tsc --noEmit)",
+      "Bash(xargs grep:*)"
     ]
   }
 }

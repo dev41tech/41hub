@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { PageContainer } from "@/components/page-container";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Bell,
@@ -166,7 +167,7 @@ export default function AdminAlerts() {
   const activeAlerts = alerts.filter((a) => a.isActive);
 
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-4xl">
+    <PageContainer className="flex flex-col gap-6 py-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/10">
@@ -284,7 +285,7 @@ export default function AdminAlerts() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageContainer>
   );
 }
 

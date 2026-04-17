@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useContext, createContext, useRef } from "react";
+import { PageContainer } from "@/components/page-container";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Puzzle,
@@ -11,6 +12,9 @@ import {
   EyeOff,
   Code2,
   Globe,
+  Play,
+  Loader2,
+  X,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +22,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
   DialogContent,
@@ -57,6 +63,285 @@ interface ApiToken {
 }
 
 const BASE_URL = window.location.origin + "/api";
+
+// ── API Explorer types and context ────────────────────────────────────────
+interface EndpointDef {
+  method: string;
+  path: string;
+  desc: string;
+  scope: "read" | "write";
+  body?: string;
+}
+
+interface ExplorerContextValue {
+  open: (def: EndpointDef) => void;
+  tokens: ApiToken[];
+}
+const ExplorerContext = createContext<ExplorerContextValue | null>(null);
+
+// ── API Explorer Dialog ───────────────────────────────────────────────────
+function ApiExplorer({
+  def,
+  tokens,
+  onClose,
+}: {
+  def: EndpointDef;
+  tokens: ApiToken[];
+  onClose: () => void;
+}) {
+  const defaultBaseUrl = window.location.origin + "/api";
+  const [baseUrl, setBaseUrl] = useState(defaultBaseUrl);
+  const [token, setToken] = useState(tokens[0]?.id ?? "");
+  const [customToken, setCustomToken] = useState("");
+  const [pathParams, setPathParams] = useState<Record<string, string>>({});
+  const [queryPairs, setQueryPairs] = useState<{ k: string; v: string }[]>([{ k: "", v: "" }]);
+  const [body, setBody] = useState(def.body ?? "");
+  const [bodyError, setBodyError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{
+    status: number;
+    time: number;
+    body: string;
+    ok: boolean;
+  } | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const paramNames = Array.from(new Set((def.path.match(/:(\w+)/g) ?? []).map((p) => p.slice(1))));
+  const hasBody = ["POST", "PATCH", "PUT"].includes(def.method);
+
+  const activeToken = customToken.trim() || (tokens.find((t) => t.id === token && !t.revokedAt)?.id ?? "");
+
+  const buildUrl = () => {
+    let p = def.path;
+    for (const [k, v] of Object.entries(pathParams)) {
+      p = p.replace(`:${k}`, encodeURIComponent(v || `:${k}`));
+    }
+    const qs = queryPairs
+      .filter((q) => q.k.trim())
+      .map((q) => `${encodeURIComponent(q.k)}=${encodeURIComponent(q.v)}`)
+      .join("&");
+    return `${baseUrl}${p}${qs ? "?" + qs : ""}`;
+  };
+
+  const buildCurl = () => {
+    const url = buildUrl();
+    const bearerToken = customToken.trim() || (token ? `hub_<token-${token.slice(0, 6)}>` : "<token>");
+    const parts = [`curl -X ${def.method} "${url}"`];
+    parts.push(`  -H "Authorization: Bearer ${bearerToken}"`);
+    if (hasBody && body.trim()) {
+      parts.push(`  -H "Content-Type: application/json"`);
+      parts.push(`  -d '${body.replace(/'/g, "'\\''")}'`);
+    }
+    return parts.join(" \\\n");
+  };
+
+  const handleSend = async () => {
+    if (hasBody && body.trim()) {
+      try { JSON.parse(body); setBodyError(null); }
+      catch { setBodyError("JSON inválido"); return; }
+    }
+    setLoading(true);
+    setResult(null);
+    setSendError(null);
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
+    const start = Date.now();
+    try {
+      const url = buildUrl();
+      const headers: Record<string, string> = {};
+      const bearerToken = customToken.trim() || (token ? token : "");
+      if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;
+      if (hasBody && body.trim()) headers["Content-Type"] = "application/json";
+      const res = await fetch(url, {
+        method: def.method,
+        headers,
+        body: hasBody && body.trim() ? body : undefined,
+        signal: abortRef.current.signal,
+        credentials: "include",
+      });
+      const time = Date.now() - start;
+      const raw = await res.text();
+      let pretty = raw;
+      try { pretty = JSON.stringify(JSON.parse(raw), null, 2); } catch (_) {}
+      setResult({ status: res.status, time, body: pretty, ok: res.ok });
+    } catch (e: any) {
+      if (e.name !== "AbortError") setSendError(e.message ?? "Erro de rede");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const statusColor = result
+    ? result.status < 300 ? "text-green-600 dark:text-green-400"
+    : result.status < 500 ? "text-amber-600 dark:text-amber-400"
+    : "text-red-600 dark:text-red-400"
+    : "";
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Base URL */}
+      <div className="space-y-1.5">
+        <Label className="text-xs">Base URL</Label>
+        <Input
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          className="font-mono text-xs"
+          placeholder="https://hub.41tech.cloud/api"
+        />
+      </div>
+
+      {/* Token */}
+      <div className="space-y-1.5">
+        <Label className="text-xs">Token</Label>
+        <div className="flex gap-2">
+          {tokens.filter((t) => !t.revokedAt).length > 0 && (
+            <select
+              className="flex-1 rounded-md border bg-background px-3 py-2 text-xs"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+            >
+              <option value="">Selecionar token</option>
+              {tokens.filter((t) => !t.revokedAt).map((t) => (
+                <option key={t.id} value={t.id}>{t.name} ({t.scopes.join(", ")})</option>
+              ))}
+            </select>
+          )}
+          <Input
+            value={customToken}
+            onChange={(e) => setCustomToken(e.target.value)}
+            placeholder="Ou cole token manualmente"
+            type="password"
+            className="flex-1 font-mono text-xs"
+          />
+        </div>
+      </div>
+
+      {/* Path params */}
+      {paramNames.length > 0 && (
+        <div className="space-y-1.5">
+          <Label className="text-xs">Parâmetros de rota</Label>
+          <div className="space-y-1.5">
+            {paramNames.map((name) => (
+              <div key={name} className="flex items-center gap-2">
+                <code className="w-24 shrink-0 text-xs text-muted-foreground font-mono">:{name}</code>
+                <Input
+                  value={pathParams[name] ?? ""}
+                  onChange={(e) =>
+                    setPathParams((p) => ({ ...p, [name]: e.target.value }))
+                  }
+                  placeholder={name}
+                  className="text-xs"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Query params */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs">Query params</Label>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 text-xs px-2"
+            onClick={() => setQueryPairs((p) => [...p, { k: "", v: "" }])}
+          >
+            + Adicionar
+          </Button>
+        </div>
+        {queryPairs.map((pair, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <Input
+              value={pair.k}
+              onChange={(e) => setQueryPairs((p) => p.map((x, j) => j === i ? { ...x, k: e.target.value } : x))}
+              placeholder="key"
+              className="text-xs"
+            />
+            <span className="text-muted-foreground text-xs">=</span>
+            <Input
+              value={pair.v}
+              onChange={(e) => setQueryPairs((p) => p.map((x, j) => j === i ? { ...x, v: e.target.value } : x))}
+              placeholder="value"
+              className="text-xs"
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0"
+              onClick={() => setQueryPairs((p) => p.filter((_, j) => j !== i))}
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+        ))}
+      </div>
+
+      {/* Body */}
+      {hasBody && (
+        <div className="space-y-1.5">
+          <Label className="text-xs">Body (JSON)</Label>
+          <Textarea
+            value={body}
+            onChange={(e) => { setBody(e.target.value); setBodyError(null); }}
+            rows={4}
+            className="font-mono text-xs"
+            placeholder='{ "key": "value" }'
+          />
+          {bodyError && <p className="text-xs text-destructive">{bodyError}</p>}
+        </div>
+      )}
+
+      {/* URL preview */}
+      <div className="rounded-md bg-muted px-3 py-2 text-xs font-mono break-all text-muted-foreground">
+        <span className={`font-bold mr-2 ${METHOD_COLORS[def.method] ?? ""} rounded px-1`}>{def.method}</span>
+        {buildUrl()}
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-2">
+        <Button onClick={handleSend} disabled={loading} className="gap-2">
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+          Enviar
+        </Button>
+        <Button variant="outline" size="sm" onClick={onClose}>Fechar</Button>
+        {result && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto text-xs"
+            onClick={() => { navigator.clipboard.writeText(buildCurl()); }}
+          >
+            <Copy className="h-3 w-3 mr-1" />
+            Copiar cURL
+          </Button>
+        )}
+      </div>
+
+      {/* Error */}
+      {sendError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {sendError}
+        </div>
+      )}
+
+      {/* Result */}
+      {result && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <span className={`text-sm font-bold ${statusColor}`}>{result.status}</span>
+            <span className="text-xs text-muted-foreground">{result.time}ms</span>
+          </div>
+          <ScrollArea className="h-56 rounded-md border">
+            <pre className="p-3 text-xs font-mono whitespace-pre-wrap break-all">{result.body}</pre>
+          </ScrollArea>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -107,6 +392,7 @@ function EndpointRow({
   body?: string;
   response?: string;
 }) {
+  const explorer = useContext(ExplorerContext);
   return (
     <div className="space-y-1.5 py-2 border-b last:border-0">
       <div className="flex items-center gap-2 flex-wrap">
@@ -119,6 +405,17 @@ function EndpointRow({
         <Badge variant={scope === "write" ? "default" : "secondary"} className="text-xs shrink-0">
           {scope}
         </Badge>
+        {explorer && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 text-xs px-2 gap-1 shrink-0"
+            onClick={() => explorer.open({ method, path, desc, scope, body })}
+          >
+            <Play className="h-3 w-3" />
+            Testar
+          </Button>
+        )}
       </div>
       <p className="text-xs text-muted-foreground">{desc}</p>
       {queryParams && (
@@ -171,6 +468,7 @@ export default function AdminIntegrations() {
   const [generatedToken, setGeneratedToken] = useState<string | null>(null);
   const [showToken, setShowToken] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
+  const [explorerDef, setExplorerDef] = useState<EndpointDef | null>(null);
 
   const { data: tokens = [], isLoading } = useQuery<ApiToken[]>({
     queryKey: ["/api/admin/integrations/tokens"],
@@ -202,7 +500,7 @@ export default function AdminIntegrations() {
   const revokedTokens = tokens.filter((t) => t.revokedAt);
 
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-4xl">
+    <PageContainer className="flex flex-col gap-6 py-6">
       {/* Header */}
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-500/10">
@@ -361,6 +659,7 @@ export default function AdminIntegrations() {
 
         {/* ===== DOCS TAB ===== */}
         <TabsContent value="docs" className="space-y-6 mt-4">
+        <ExplorerContext.Provider value={{ open: setExplorerDef, tokens }}>
           {/* Base URL + Auth */}
           <div className="grid gap-4 sm:grid-cols-2">
             <Card>
@@ -542,8 +841,36 @@ X-Hub-Event: ticket_created
               />
             </CardContent>
           </Card>
+        </ExplorerContext.Provider>
         </TabsContent>
       </Tabs>
+
+      {/* API Explorer Dialog */}
+      <Dialog open={explorerDef !== null} onOpenChange={(o) => !o && setExplorerDef(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Play className="h-4 w-4" />
+              Testar endpoint
+              {explorerDef && (
+                <span className={`rounded px-1.5 py-0.5 text-xs font-mono font-semibold ${METHOD_COLORS[explorerDef.method] ?? ""}`}>
+                  {explorerDef.method}
+                </span>
+              )}
+              {explorerDef && (
+                <code className="text-xs font-mono text-muted-foreground">{explorerDef.path}</code>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          {explorerDef && (
+            <ApiExplorer
+              def={explorerDef}
+              tokens={tokens}
+              onClose={() => setExplorerDef(null)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Create Token Dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -624,6 +951,6 @@ X-Hub-Event: ticket_created
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }

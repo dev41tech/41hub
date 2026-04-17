@@ -62,7 +62,39 @@ interface ApiToken {
   createdByName: string | null;
 }
 
-const BASE_URL = window.location.origin + "/api";
+// Base URL shown in docs — no /api suffix; each endpoint path starts with /api/...
+const BASE_URL = window.location.origin;
+
+// ── URL utilities ─────────────────────────────────────────────────────────
+function normalizeBaseUrl(base: string): string {
+  // Remove trailing slashes
+  return base.replace(/\/+$/, "");
+}
+
+function normalizePath(path: string): string {
+  // Ensure leading slash
+  let p = path.startsWith("/") ? path : "/" + path;
+  // Collapse /api/api → /api (happens when user puts /api in base URL)
+  p = p.replace(/^\/api\/api(\/|$)/, "/api$1");
+  return p;
+}
+
+function buildFinalUrl(
+  base: string,
+  path: string,
+  pathParams: Record<string, string>,
+  queryPairs: { k: string; v: string }[]
+): string {
+  let p = normalizePath(path);
+  for (const [k, v] of Object.entries(pathParams)) {
+    p = p.replace(`:${k}`, encodeURIComponent(v || `:${k}`));
+  }
+  const qs = queryPairs
+    .filter((q) => q.k.trim())
+    .map((q) => `${encodeURIComponent(q.k)}=${encodeURIComponent(q.v)}`)
+    .join("&");
+  return `${normalizeBaseUrl(base)}${p}${qs ? "?" + qs : ""}`;
+}
 
 // ── API Explorer types and context ────────────────────────────────────────
 interface EndpointDef {
@@ -89,7 +121,7 @@ function ApiExplorer({
   tokens: ApiToken[];
   onClose: () => void;
 }) {
-  const defaultBaseUrl = window.location.origin + "/api";
+  const defaultBaseUrl = window.location.origin;
   const [baseUrl, setBaseUrl] = useState(defaultBaseUrl);
   const [token, setToken] = useState(tokens[0]?.id ?? "");
   const [customToken, setCustomToken] = useState("");
@@ -103,6 +135,8 @@ function ApiExplorer({
     time: number;
     body: string;
     ok: boolean;
+    isHtml?: boolean;
+    url?: string;
   } | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -112,22 +146,13 @@ function ApiExplorer({
 
   const activeToken = customToken.trim() || (tokens.find((t) => t.id === token && !t.revokedAt)?.id ?? "");
 
-  const buildUrl = () => {
-    let p = def.path;
-    for (const [k, v] of Object.entries(pathParams)) {
-      p = p.replace(`:${k}`, encodeURIComponent(v || `:${k}`));
-    }
-    const qs = queryPairs
-      .filter((q) => q.k.trim())
-      .map((q) => `${encodeURIComponent(q.k)}=${encodeURIComponent(q.v)}`)
-      .join("&");
-    return `${baseUrl}${p}${qs ? "?" + qs : ""}`;
-  };
+  const buildUrl = () => buildFinalUrl(baseUrl, def.path, pathParams, queryPairs);
 
   const buildCurl = () => {
     const url = buildUrl();
     const bearerToken = customToken.trim() || (token ? `hub_<token-${token.slice(0, 6)}>` : "<token>");
     const parts = [`curl -X ${def.method} "${url}"`];
+    parts.push(`  -H "Accept: application/json"`);
     parts.push(`  -H "Authorization: Bearer ${bearerToken}"`);
     if (hasBody && body.trim()) {
       parts.push(`  -H "Content-Type: application/json"`);
@@ -149,7 +174,7 @@ function ApiExplorer({
     const start = Date.now();
     try {
       const url = buildUrl();
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = { "Accept": "application/json" };
       const bearerToken = customToken.trim() || (token ? token : "");
       if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;
       if (hasBody && body.trim()) headers["Content-Type"] = "application/json";
@@ -162,9 +187,13 @@ function ApiExplorer({
       });
       const time = Date.now() - start;
       const raw = await res.text();
+      const contentType = res.headers.get("content-type") ?? "";
+      const isHtml = contentType.includes("text/html") || raw.trimStart().startsWith("<!DOCTYPE");
       let pretty = raw;
-      try { pretty = JSON.stringify(JSON.parse(raw), null, 2); } catch (_) {}
-      setResult({ status: res.status, time, body: pretty, ok: res.ok });
+      if (!isHtml) {
+        try { pretty = JSON.stringify(JSON.parse(raw), null, 2); } catch (_) {}
+      }
+      setResult({ status: res.status, time, body: pretty, ok: res.ok && !isHtml, isHtml, url });
     } catch (e: any) {
       if (e.name !== "AbortError") setSendError(e.message ?? "Erro de rede");
     } finally {
@@ -182,12 +211,12 @@ function ApiExplorer({
     <div className="flex flex-col gap-4">
       {/* Base URL */}
       <div className="space-y-1.5">
-        <Label className="text-xs">Base URL</Label>
+        <Label className="text-xs">Base URL <span className="text-muted-foreground font-normal">(sem /api — o path já inclui)</span></Label>
         <Input
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
           className="font-mono text-xs"
-          placeholder="https://hub.41tech.cloud/api"
+          placeholder="https://hub.41tech.cloud"
         />
       </div>
 
@@ -295,9 +324,12 @@ function ApiExplorer({
       )}
 
       {/* URL preview */}
-      <div className="rounded-md bg-muted px-3 py-2 text-xs font-mono break-all text-muted-foreground">
-        <span className={`font-bold mr-2 ${METHOD_COLORS[def.method] ?? ""} rounded px-1`}>{def.method}</span>
-        {buildUrl()}
+      <div className="space-y-1">
+        <Label className="text-xs text-muted-foreground">Preview da URL final</Label>
+        <div className="rounded-md bg-muted px-3 py-2 text-xs font-mono break-all text-muted-foreground flex items-start gap-2">
+          <span className={`shrink-0 font-bold ${METHOD_COLORS[def.method] ?? ""} rounded px-1`}>{def.method}</span>
+          <span className="text-foreground">{buildUrl()}</span>
+        </div>
       </div>
 
       {/* Actions */}
@@ -334,8 +366,23 @@ function ApiExplorer({
             <span className={`text-sm font-bold ${statusColor}`}>{result.status}</span>
             <span className="text-xs text-muted-foreground">{result.time}ms</span>
           </div>
+          {result.isHtml && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 space-y-1">
+              <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+                Resposta HTML detectada — a URL caiu no fallback do SPA (rota inexistente na API).
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Verifique se a Base URL está correta (não inclua <code>/api</code> — o path já começa com <code>/api/...</code>).
+              </p>
+              {result.url && (
+                <p className="text-xs font-mono break-all text-muted-foreground">
+                  URL chamada: <span className="text-foreground">{result.url}</span>
+                </p>
+              )}
+            </div>
+          )}
           <ScrollArea className="h-56 rounded-md border">
-            <pre className="p-3 text-xs font-mono whitespace-pre-wrap break-all">{result.body}</pre>
+            <pre className="p-3 text-xs font-mono whitespace-pre-wrap break-all">{result.isHtml ? "(HTML omitido — veja o aviso acima)" : result.body}</pre>
           </ScrollArea>
         </div>
       )}
@@ -766,6 +813,21 @@ export default function AdminIntegrations() {
               body={`{ "title": "string", "body": "markdown", "categoryId": "uuid", "isPublished": true }`} />
             <EndpointRow method="PATCH" path="/api/admin/kb/:id" desc="Atualiza artigo (admin)" scope="write" />
             <EndpointRow method="DELETE" path="/api/admin/kb/:id" desc="Remove artigo (admin)" scope="write" />
+          </EndpointGroup>
+
+          {/* Users */}
+          <EndpointGroup title="Usuários (Users)" color="bg-indigo-500/10 text-indigo-500">
+            <EndpointRow method="GET" path="/api/auth/me" desc="Retorna dados do usuário autenticado (sessão atual)" scope="read"
+              response={`{ "id": "uuid", "name": "João Silva", "email": "joao@41tech.cloud", "isAdmin": false, "roles": [{ "roleName": "Coordenador", "sectorId": "uuid", "sectorName": "TI" }] }`} />
+            <EndpointRow method="GET" path="/api/admin/users" desc="Lista todos os usuários (admin)" scope="read"
+              queryParams="q (busca por nome/email), sectorId, limit, page"
+              response={`[{ "id": "uuid", "name": "string", "email": "string", "isAdmin": false, "isActive": true, "roles": [] }]`} />
+            <EndpointRow method="POST" path="/api/admin/users" desc="Cria usuário local (admin)" scope="write"
+              body={`{ "name": "string", "email": "string", "password": "string", "isAdmin": false }`}
+              response={`{ "id": "uuid", "name": "string", "email": "string", "isAdmin": false }`} />
+            <EndpointRow method="PATCH" path="/api/admin/users/:id" desc="Atualiza dados do usuário (admin)" scope="write"
+              body={`{ "name": "string", "isAdmin": false, "isActive": true }`} />
+            <EndpointRow method="DELETE" path="/api/admin/users/:id" desc="Remove usuário (admin)" scope="write" />
           </EndpointGroup>
 
           {/* Audit Logs */}

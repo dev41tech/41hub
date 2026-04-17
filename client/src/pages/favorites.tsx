@@ -6,10 +6,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SearchInput } from "@/components/search-input";
 import { ResourceGrid } from "@/components/resource-grid";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useAuth } from "@/lib/auth-context";
 import type { ResourceWithHealth } from "@shared/schema";
 
 export default function Favorites() {
   const [, setLocation] = useLocation();
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
 
   const { data: favorites = [], isLoading } = useQuery<ResourceWithHealth[]>({
@@ -83,6 +85,7 @@ export default function Favorites() {
             isLoading={isLoading}
             onOpen={handleOpenResource}
             onToggleFavorite={handleToggleFavorite}
+            isAdmin={user?.isAdmin === true}
             emptyMessage={
               searchQuery
                 ? "Nenhum favorito encontrado para sua busca"

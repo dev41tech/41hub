@@ -1,7 +1,16 @@
-import { Star, ExternalLink, Monitor, BarChart3 } from "lucide-react";
+import { useState } from "react";
+import { Star, ExternalLink, Monitor, BarChart3, AlertTriangle, Wrench } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -17,6 +26,7 @@ interface ResourceCardProps {
   onOpen: (resource: ResourceWithHealth) => void;
   onToggleFavorite: (resourceId: string, isFavorite: boolean) => void;
   showSector?: boolean;
+  isAdmin?: boolean;
 }
 
 const getIcon = (iconName: string) => {
@@ -56,11 +66,21 @@ export function ResourceCard({
   onOpen,
   onToggleFavorite,
   showSector = true,
+  isAdmin = false,
 }: ResourceCardProps) {
+  const [showHealthModal, setShowHealthModal] = useState(false);
   const Icon = getIcon(resource.icon || "Layout");
   const isApp = resource.type === "APP";
   const displayHealth = effectiveHealth(resource);
   const hasIssue = displayHealth === "DOWN" || displayHealth === "DEGRADED";
+
+  const handleClick = () => {
+    if (hasIssue && !isAdmin) {
+      setShowHealthModal(true);
+      return;
+    }
+    onOpen(resource);
+  };
 
   const statusDot = (
     <div
@@ -72,12 +92,13 @@ export function ResourceCard({
   );
 
   return (
+    <>
     <Card
       className={cn(
         "group relative hover-elevate cursor-pointer transition-all duration-200",
         hasIssue && "border-amber-500/30"
       )}
-      onClick={() => onOpen(resource)}
+      onClick={handleClick}
       data-testid={`card-resource-${resource.id}`}
     >
       <CardContent className="p-4">
@@ -183,7 +204,7 @@ export function ResourceCard({
               className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
               onClick={(e) => {
                 e.stopPropagation();
-                onOpen(resource);
+                handleClick();
               }}
               data-testid={`button-open-${resource.id}`}
             >
@@ -193,5 +214,56 @@ export function ResourceCard({
         </div>
       </CardContent>
     </Card>
+
+    <Dialog open={showHealthModal} onOpenChange={setShowHealthModal}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            {displayHealth === "DOWN" ? (
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+            ) : (
+              <Wrench className="h-5 w-5 text-amber-500" />
+            )}
+            {displayHealth === "DOWN" ? "Recurso fora do ar" : "Recurso em manutenção"}
+          </DialogTitle>
+          <DialogDescription>
+            {resource.healthMessage
+              ? resource.healthMessage
+              : displayHealth === "DOWN"
+              ? "Este recurso está fora do ar no momento e não pode ser acessado."
+              : "Este recurso está em manutenção no momento."}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="flex-col sm:flex-row gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setShowHealthModal(false)}
+          >
+            Fechar
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setShowHealthModal(false);
+              window.location.href = "/alerts";
+            }}
+          >
+            Ver alertas
+          </Button>
+          {isAdmin && (
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setShowHealthModal(false);
+                onOpen(resource);
+              }}
+            >
+              Abrir mesmo assim
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

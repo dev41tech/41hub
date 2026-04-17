@@ -74,6 +74,8 @@ export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout, isAuthenticated } = useAuth();
   const isAdmin = user?.isAdmin;
+  // "Usuario" role only — no Coordinator, no Admin
+  const isUsuarioOnly = !isAdmin && !(user?.roles?.some((r: any) => r.roleName === "Coordenador"));
 
   const [recursosOpen, setRecursosOpen] = useState(
     ["/apps", "/dashboards", "/favorites"].some((p) => location.startsWith(p))
@@ -165,19 +167,21 @@ export function AppSidebar() {
                 </SidebarMenuItem>
               </Collapsible>
 
-              {/* Chamados */}
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  isActive={location.startsWith("/tickets")}
-                  data-testid="nav-chamados"
-                >
-                  <Link href="/tickets">
-                    <Ticket className="h-4 w-4" />
-                    <span>Chamados</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+              {/* Chamados — hidden for plain "Usuario" role */}
+              {!isUsuarioOnly && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={location.startsWith("/tickets")}
+                    data-testid="nav-chamados"
+                  >
+                    <Link href="/tickets">
+                      <Ticket className="h-4 w-4" />
+                      <span>Chamados</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
 
               {/* Digitação */}
               <SidebarMenuItem>

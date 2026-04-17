@@ -1,5 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useParams, useLocation } from "wouter";
+import { PageContainer } from "@/components/page-container";
 import {
   ArrowLeft,
   BookOpen,
@@ -90,7 +91,7 @@ export default function KbArticle() {
 
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-6 p-6 max-w-3xl">
+      <PageContainer className="flex flex-col gap-6 py-6">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-6 w-full" />
         <Skeleton className="h-4 w-3/4" />
@@ -99,7 +100,7 @@ export default function KbArticle() {
             <Skeleton key={i} className="h-4 w-full" />
           ))}
         </div>
-      </div>
+      </PageContainer>
     );
   }
 
@@ -119,7 +120,7 @@ export default function KbArticle() {
   const html = renderMarkdown(article.body);
 
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-3xl">
+    <PageContainer className="flex flex-col gap-6 py-6">
       {/* Back + admin edit */}
       <div className="flex items-center justify-between gap-3">
         <Button variant="ghost" size="sm" onClick={() => setLocation("/kb")}>
@@ -222,6 +223,6 @@ export default function KbArticle() {
           </div>
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }

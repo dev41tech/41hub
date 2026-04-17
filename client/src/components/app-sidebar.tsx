@@ -58,6 +58,7 @@ import {
 const adminSubItems = [
   { title: "Usuários", url: "/admin/users", icon: Users },
   { title: "Recursos", url: "/admin/resources", icon: Database },
+  { title: "Gestão de Alertas", url: "/admin/alerts", icon: Bell },
   { title: "Config. Chamados", url: "/admin/tickets-settings", icon: FileText },
   { title: "Config. Digitação", url: "/admin/typing", icon: Keyboard },
   { title: "Integrações", url: "/admin/integrations", icon: Puzzle },
@@ -196,7 +197,7 @@ export function AppSidebar() {
               <SidebarMenuItem>
                 <SidebarMenuButton
                   asChild
-                  isActive={location === "/alerts" || location === "/admin/alerts"}
+                  isActive={location === "/alerts"}
                   data-testid="nav-alertas"
                 >
                   <Link href="/alerts">
@@ -346,7 +347,11 @@ export function AppSidebar() {
               >
                 <Avatar className="h-8 w-8">
                   {user.photoUrl && (
-                    <AvatarImage src={user.photoUrl} alt={user.name} />
+                    <AvatarImage
+                      src={user.photoUrl}
+                      alt={user.name}
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                    />
                   )}
                   <AvatarFallback className="bg-primary text-primary-foreground text-xs">
                     {getInitials(user.name)}

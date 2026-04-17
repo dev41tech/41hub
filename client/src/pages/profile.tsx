@@ -55,6 +55,7 @@ export default function Profile() {
   const [whatsapp, setWhatsapp] = useState(user?.whatsapp || "");
   const [isEditingWhatsapp, setIsEditingWhatsapp] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [photoLoadError, setPhotoLoadError] = useState(false);
 
   const [showAllSectors, setShowAllSectors] = useState(false);
   const [selectedSectorId, setSelectedSectorId] = useState<string>("all");
@@ -223,7 +224,13 @@ export default function Profile() {
           <div className="flex flex-col sm:flex-row items-start gap-6">
             <div className="flex flex-col items-center gap-2">
               <Avatar className="h-24 w-24">
-                {user.photoUrl && <AvatarImage src={user.photoUrl} alt={user.name} />}
+                {user.photoUrl && !photoLoadError && (
+                  <AvatarImage
+                    src={user.photoUrl}
+                    alt={user.name}
+                    onError={() => setPhotoLoadError(true)}
+                  />
+                )}
                 <AvatarFallback className="bg-primary text-primary-foreground text-2xl">
                   {getInitials(user.name)}
                 </AvatarFallback>

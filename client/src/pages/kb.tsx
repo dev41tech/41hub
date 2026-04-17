@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { PageContainer } from "@/components/page-container";
 import { BookOpen, Search, Eye, ThumbsUp, ChevronRight, Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -55,7 +56,7 @@ export default function Kb() {
   const leafCategories = categories.filter((c) => c.parentId !== null);
 
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-4xl">
+    <PageContainer className="flex flex-col gap-6 py-6">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-chart-1/10">
@@ -155,6 +156,6 @@ export default function Kb() {
           ))}
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

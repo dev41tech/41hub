@@ -203,6 +203,53 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     console.error("[startup] Failed to connect to DB:", e);
   }
 
+  // ── Idempotent schema bootstrap (safe for prod without full migrations) ──
+  try {
+    // Ensure pg enums exist before tables that use them
+    await pool.query(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'alert_severity') THEN
+        CREATE TYPE alert_severity AS ENUM ('info','warning','critical');
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'health_status') THEN
+        CREATE TYPE health_status AS ENUM ('UP','DEGRADED','DOWN');
+      END IF;
+    END $$`);
+
+    // system_alerts table
+    await pool.query(`CREATE TABLE IF NOT EXISTS system_alerts (
+      id          VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+      title       VARCHAR(200) NOT NULL,
+      message     TEXT NOT NULL,
+      severity    alert_severity NOT NULL DEFAULT 'info',
+      is_active   BOOLEAN NOT NULL DEFAULT true,
+      starts_at   TIMESTAMPTZ,
+      ends_at     TIMESTAMPTZ,
+      created_by  VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+
+    // system_alert_reads table
+    await pool.query(`CREATE TABLE IF NOT EXISTS system_alert_reads (
+      id        VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+      alert_id  VARCHAR(36) NOT NULL REFERENCES system_alerts(id) ON DELETE CASCADE,
+      user_id   VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      read_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(alert_id, user_id)
+    )`);
+
+    // health columns on resources (added post-initial schema)
+    await pool.query(`ALTER TABLE resources
+      ADD COLUMN IF NOT EXISTS health_status_override health_status DEFAULT 'UP',
+      ADD COLUMN IF NOT EXISTS health_message TEXT,
+      ADD COLUMN IF NOT EXISTS health_updated_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS health_updated_by VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL`);
+
+    console.info("[startup] Schema bootstrap OK");
+  } catch (e: any) {
+    console.error("[startup] Schema bootstrap error (non-fatal):", e?.message ?? e);
+  }
+
   // Session secret validation - required in production
   const sessionSecret = process.env.SESSION_SECRET;
   if (process.env.NODE_ENV === "production" && !sessionSecret) {
@@ -3218,28 +3265,46 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           params
         ),
         pool.query(
-          `SELECT COUNT(*) as total, 0 as up, 0 as degraded, 0 as down FROM resources WHERE is_active = true`
+          `SELECT
+             COUNT(*) as total,
+             COUNT(*) FILTER (WHERE COALESCE(health_status_override,'UP') = 'UP') as up,
+             COUNT(*) FILTER (WHERE health_status_override = 'DEGRADED') as degraded,
+             COUNT(*) FILTER (WHERE health_status_override = 'DOWN') as down
+           FROM resources WHERE is_active = true`
         ).catch(async (e: any) => {
-          // Fallback: also handle if health_status_override column is present
-          if (e?.code === "42703") {
-            return pool.query(`SELECT COUNT(*) as total, 0 as up, 0 as degraded, 0 as down FROM resources WHERE is_active = true`);
+          if (e?.code === "42703" || e?.code === "42P01") {
+            return pool.query(`SELECT COUNT(*) as total, COUNT(*) as up, 0 as degraded, 0 as down FROM resources WHERE is_active = true`);
           }
           throw e;
         }),
         pool.query(
-          `SELECT COUNT(*) as totalSessions, ROUND(AVG(wpm)) as avgWpm,
-                  ROUND(AVG(accuracy::numeric), 1) as avgAccuracy
+          `SELECT COUNT(*) as "totalSessions",
+                  ROUND(AVG(wpm)) as "avgWpm",
+                  ROUND(AVG(accuracy::numeric), 1) as "avgAccuracy"
            FROM typing_scores`
-        ),
+        ).catch(async (e: any) => {
+          if (e?.code === "42P01") {
+            // typing_scores doesn't exist — try typing_sessions
+            return pool.query(
+              `SELECT COUNT(*) as "totalSessions", NULL as "avgWpm", NULL as "avgAccuracy" FROM typing_sessions`
+            ).catch(() => ({ rows: [{ totalSessions: "0", avgWpm: null, avgAccuracy: null }] }));
+          }
+          throw e;
+        }),
       ]);
 
+      const typingRow = typing.rows[0] ?? {};
       res.json({
         tickets: tickets.rows[0],
         byStatus: byStatus.rows,
         byPriority: byPriority.rows,
         topCategories: topCategories.rows,
         resources: resources.rows[0],
-        typing: typing.rows[0],
+        typing: {
+          totalSessions: typingRow.totalSessions ?? typingRow["totalSessions"] ?? "0",
+          avgWpm: typingRow.avgWpm ?? typingRow["avgWpm"] ?? null,
+          avgAccuracy: typingRow.avgAccuracy ?? typingRow["avgAccuracy"] ?? null,
+        },
       });
     } catch (error: any) {
       if (error?.code === "42P01" || error?.code === "42703") {

@@ -417,9 +417,7 @@ export default function TicketsNew() {
                         {kbSuggestions.slice(0, 3).map((article) => (
                           <a
                             key={article.id}
-                            href={`/api/kb/${article.id}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                            href={`/kb/articles/${article.id}`}
                             className="flex items-center justify-between gap-2 rounded-md border bg-card p-3 hover-elevate cursor-pointer"
                             data-testid={`kb-suggestion-${article.id}`}
                           >

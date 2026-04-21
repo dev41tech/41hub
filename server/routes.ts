@@ -787,7 +787,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await fs.promises.access(filePath);
       return res.sendFile(filePath);
     } catch {
-      return res.redirect("/favicon.png")
+      return res.redirect("/stdProfile.png")
     }
   });
 

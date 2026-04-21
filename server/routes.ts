@@ -779,17 +779,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Serve uploaded files (authenticated)
-  app.get("/api/uploads/:filename", requireAuth, (req, res) => {
-    // Use basename to strip any directory components — prevents path traversal
-    const safeName = path.basename(req.params.filename);
-    if (!safeName || safeName.startsWith(".")) {
-      return res.status(400).json({ error: "Invalid filename" });
+  app.get("/api/uploads/:filename", async (req, res) => {
+    const filename = path.basename(req.params.filename);
+    const filePath = path.join(process.env.UPLOAD_DIR ?? "/app/uploads", filename)
+
+    try {
+      await fs.promises.access(filePath);
+      return res.sendFile(filePath);
+    } catch {
+      return res.redirect("/favicon.png")
     }
-    const filePath = path.join(uploadDir, safeName);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: "File not found" });
-    }
-    res.sendFile(filePath);
   });
 
   // ==================== RESOURCE ROUTES ====================

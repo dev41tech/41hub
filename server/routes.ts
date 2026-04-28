@@ -270,6 +270,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       revoked_at    TIMESTAMPTZ
     )`);
 
+    // typing_scores.level column (added after initial schema)
+    await pool.query(`ALTER TABLE typing_scores ADD COLUMN IF NOT EXISTS level VARCHAR(10) NOT NULL DEFAULT 'medium'`);
+
     console.info("[startup] Schema bootstrap OK");
   } catch (e: any) {
     console.error("[startup] Schema bootstrap error (non-fatal):", e?.message ?? e);
@@ -1169,6 +1172,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const { sectorIds, roleName, ...userUpdates } = parsed.data;
       const userId = req.params.id as string;
+
+      // Prevent admin from deactivating their own account
+      if (userUpdates.isActive === false && userId === req.user!.id) {
+        return res.status(400).json({ error: "Você não pode desativar sua própria conta" });
+      }
 
       // Update basic user info if provided
       if (Object.keys(userUpdates).length > 0) {
@@ -2690,18 +2698,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/typing/session", requireAuth, async (req, res) => {
     try {
-      const difficulty = Math.max(1, Math.min(3, parseInt(req.body?.difficulty) || 1));
+      const rawLevel = req.body?.level as string | undefined;
+      const level: "easy" | "medium" | "hard" =
+        rawLevel === "easy" || rawLevel === "hard" ? rawLevel : "medium";
+
+      // Map human level to DB difficulty range
+      const diffRange = level === "easy" ? [1, 2] : level === "hard" ? [4, 5] : [3];
+
       const activeTexts = await storage.listTypingTexts(true);
       if (activeTexts.length === 0) {
         return res.status(400).json({ error: "Nenhum texto disponível para digitação" });
       }
-      const diffTexts = activeTexts.filter((t: any) => t.difficulty === difficulty);
-      const pool = diffTexts.length > 0 ? diffTexts : activeTexts;
-      const text = pool[Math.floor(Math.random() * pool.length)];
+      const diffTexts = activeTexts.filter((t: any) => diffRange.includes(t.difficulty));
+      if (diffTexts.length === 0) {
+        return res.status(404).json({
+          error: `Nenhum texto cadastrado para o nível "${level}". Peça ao admin para cadastrar textos com dificuldade ${diffRange.join(" ou ")}.`,
+          level,
+        });
+      }
+      const textPool = diffTexts;
+      const text = textPool[Math.floor(Math.random() * textPool.length)];
       const nonce = crypto.randomBytes(16).toString("hex");
       const expiresAt = new Date(Date.now() + 3 * 60 * 1000);
       const session = await storage.createTypingSession(req.user!.id, text.id, nonce, expiresAt);
-      res.json({ session, text, difficulty });
+      res.json({ session, text, level });
     } catch (error) {
       console.error("Error creating typing session:", error);
       res.status(500).json({ error: "Failed to create typing session" });
@@ -2717,12 +2737,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         accuracy: z.number().min(0).max(100),
         durationMs: z.number().min(1000).max(90000),
         typed: z.string().min(1),
-        difficulty: z.number().int().min(1).max(3).optional(),
+        level: z.enum(["easy", "medium", "hard"]).optional(),
+        // Anti-cheat telemetry
+        pasteAttempts: z.number().int().min(0).optional(),
+        maxDeltaChars: z.number().int().min(0).optional(),
       });
 
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: "Dados inválidos", details: parsed.error.issues });
+      }
+
+      // ── Anti-cheat: reject scores with paste attempts or huge jumps ──
+      const PASTE_DELTA_THRESHOLD = 25;
+      if ((parsed.data.pasteAttempts ?? 0) > 0) {
+        return res.status(400).json({ error: "anti_cheat", message: "Tentativa de colagem detectada" });
+      }
+      if ((parsed.data.maxDeltaChars ?? 0) >= PASTE_DELTA_THRESHOLD) {
+        return res.status(400).json({ error: "anti_cheat", message: "Variação de entrada suspeita detectada" });
       }
 
       const session = await storage.getTypingSession(parsed.data.sessionId);
@@ -2734,6 +2766,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const text = session.textId ? await storage.getTypingText(session.textId) : null;
       if (!text) return res.status(400).json({ error: "Texto original não encontrado" });
+
+      // Derive canonical level from the actual text difficulty (server-authoritative)
+      const textDiff = text.difficulty;
+      const derivedLevel: "easy" | "medium" | "hard" =
+        textDiff <= 2 ? "easy" : textDiff <= 3 ? "medium" : "hard";
+      const level = parsed.data.level || derivedLevel;
 
       let finalDurationMs = parsed.data.durationMs;
       const durationServerMs = Date.now() - new Date(session.startedAt).getTime();
@@ -2756,7 +2794,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const userSectorId = req.user!.roles?.[0]?.sectorId || null;
       const now = new Date();
       const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-      const difficulty = parsed.data.difficulty || 1;
 
       const score = await storage.submitTypingSession(parsed.data.sessionId, {
         wpm: finalWpm,
@@ -2765,7 +2802,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         userId: req.user!.id,
         sectorId: userSectorId,
         monthKey,
-        difficulty,
+        difficulty: textDiff,
+        level,
       });
 
       res.json(score);
@@ -2780,8 +2818,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const now = new Date();
       const monthKey = (req.query.month as string) || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
       const sectorId = req.query.sectorId as string | undefined;
-      const difficulty = req.query.difficulty ? parseInt(req.query.difficulty as string) : undefined;
-      const leaderboard = await storage.getTypingLeaderboard({ monthKey, sectorId, difficulty, limit: 20 });
+      const rawLevel = req.query.level as string | undefined;
+      const level = rawLevel && ["easy", "medium", "hard"].includes(rawLevel) ? rawLevel as "easy" | "medium" | "hard" : undefined;
+      const leaderboard = await storage.getTypingLeaderboard({ monthKey, sectorId, level, limit: 20 });
       res.json(leaderboard);
     } catch (error) {
       console.error("Error fetching leaderboard:", error);
@@ -2789,10 +2828,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.get("/api/typing/podium", requireAuth, async (req, res) => {
+    try {
+      const now = new Date();
+      // Default: last month
+      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const defaultMonth = `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, "0")}`;
+      const monthKey = (req.query.month as string) || defaultMonth;
+      const podium = await storage.getTypingPodium(monthKey);
+      res.json(podium);
+    } catch (error) {
+      console.error("Error fetching typing podium:", error);
+      res.status(500).json({ error: "Failed to fetch podium" });
+    }
+  });
+
   app.get("/api/typing/me", requireAuth, async (req, res) => {
     try {
-      const difficulty = req.query.difficulty ? parseInt(req.query.difficulty as string) : undefined;
-      const best = await storage.getUserBestTypingScore(req.user!.id, difficulty);
+      const rawLevel = req.query.level as string | undefined;
+      const level = rawLevel && ["easy", "medium", "hard"].includes(rawLevel) ? rawLevel : undefined;
+      const best = await storage.getUserBestTypingScore(req.user!.id, level);
       res.json(best || null);
     } catch (error) {
       console.error("Error fetching user typing score:", error);

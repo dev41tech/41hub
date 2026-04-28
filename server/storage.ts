@@ -328,9 +328,10 @@ export interface IStorage {
   createTypingSession(userId: string, textId: string, nonce: string, expiresAt: Date): Promise<TypingSession>;
   getTypingSession(id: string): Promise<TypingSession | undefined>;
   getTypingSessionByNonce(nonce: string): Promise<TypingSession | undefined>;
-  submitTypingSession(sessionId: string, score: { wpm: number; accuracy: string; durationMs: number; userId: string; sectorId: string | null; monthKey: string; difficulty: number }): Promise<TypingScore>;
-  getTypingLeaderboard(opts: { monthKey: string; sectorId?: string; difficulty?: number; limit?: number }): Promise<Array<{ userId: string; userName: string; userPhoto: string | null; sectorName: string | null; wpm: number; accuracy: string; monthKey: string }>>;
-  getUserBestTypingScore(userId: string, difficulty?: number): Promise<TypingScore | undefined>;
+  submitTypingSession(sessionId: string, score: { wpm: number; accuracy: string; durationMs: number; userId: string; sectorId: string | null; monthKey: string; difficulty: number; level: string }): Promise<TypingScore>;
+  getTypingLeaderboard(opts: { monthKey: string; sectorId?: string; level?: string; limit?: number }): Promise<Array<{ userId: string; userName: string; userPhoto: string | null; sectorName: string | null; wpm: number; accuracy: string; monthKey: string; level: string }>>;
+  getUserBestTypingScore(userId: string, level?: string): Promise<TypingScore | undefined>;
+  getTypingPodium(monthKey: string): Promise<Array<{ level: string; rank: number; userId: string; userName: string; userPhoto: string | null; wpm: number; accuracy: string }>>;
 
   // TI Dashboard
   getTiDashboard(range: '7d' | '30d'): Promise<{
@@ -2248,7 +2249,7 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
-  async submitTypingSession(sessionId: string, score: { wpm: number; accuracy: string; durationMs: number; userId: string; sectorId: string | null; monthKey: string; difficulty: number }): Promise<TypingScore> {
+  async submitTypingSession(sessionId: string, score: { wpm: number; accuracy: string; durationMs: number; userId: string; sectorId: string | null; monthKey: string; difficulty: number; level: string }): Promise<TypingScore> {
     await db.update(typingSessions).set({ submittedAt: new Date() }).where(eq(typingSessions.id, sessionId));
     const [row] = await db.insert(typingScores).values({
       userId: score.userId,
@@ -2258,17 +2259,18 @@ export class DatabaseStorage implements IStorage {
       accuracy: score.accuracy,
       durationMs: score.durationMs,
       difficulty: score.difficulty,
+      level: score.level,
     }).returning();
     return row;
   }
 
-  async getTypingLeaderboard(opts: { monthKey: string; sectorId?: string; difficulty?: number; limit?: number }): Promise<Array<{ userId: string; userName: string; userPhoto: string | null; sectorName: string | null; wpm: number; accuracy: string; monthKey: string }>> {
+  async getTypingLeaderboard(opts: { monthKey: string; sectorId?: string; level?: string; limit?: number }): Promise<Array<{ userId: string; userName: string; userPhoto: string | null; sectorName: string | null; wpm: number; accuracy: string; monthKey: string; level: string }>> {
     const conditions: any[] = [eq(typingScores.monthKey, opts.monthKey)];
     if (opts.sectorId) {
       conditions.push(eq(typingScores.sectorId, opts.sectorId));
     }
-    if (opts.difficulty) {
-      conditions.push(eq(typingScores.difficulty, opts.difficulty));
+    if (opts.level) {
+      conditions.push(eq(typingScores.level, opts.level));
     }
 
     const rows = await db
@@ -2281,13 +2283,14 @@ export class DatabaseStorage implements IStorage {
         wpm: typingScores.wpm,
         accuracy: typingScores.accuracy,
         monthKey: typingScores.monthKey,
+        level: typingScores.level,
       })
       .from(typingScores)
       .innerJoin(users, eq(typingScores.userId, users.id))
       .leftJoin(sectors, eq(typingScores.sectorId, sectors.id))
       .where(and(...conditions))
       .orderBy(desc(typingScores.wpm))
-      .limit(opts.limit || 50);
+      .limit((opts.limit || 20) * 10); // fetch extra rows to deduplicate per user
 
     const bestByUser = new Map<string, typeof rows[0]>();
     for (const row of rows) {
@@ -2299,6 +2302,7 @@ export class DatabaseStorage implements IStorage {
 
     return Array.from(bestByUser.values())
       .sort((a, b) => b.wpm - a.wpm)
+      .slice(0, opts.limit || 20)
       .map(r => ({
         userId: r.userId,
         userName: r.userName,
@@ -2307,19 +2311,65 @@ export class DatabaseStorage implements IStorage {
         wpm: r.wpm,
         accuracy: r.accuracy,
         monthKey: r.monthKey,
+        level: r.level,
       }));
   }
 
-  async getUserBestTypingScore(userId: string, difficulty?: number): Promise<TypingScore | undefined> {
+  async getUserBestTypingScore(userId: string, level?: string): Promise<TypingScore | undefined> {
     const conditions: any[] = [eq(typingScores.userId, userId)];
-    if (difficulty) {
-      conditions.push(eq(typingScores.difficulty, difficulty));
+    if (level) {
+      conditions.push(eq(typingScores.level, level));
     }
     const [row] = await db.select().from(typingScores)
       .where(and(...conditions))
       .orderBy(desc(typingScores.wpm))
       .limit(1);
     return row;
+  }
+
+  async getTypingPodium(monthKey: string): Promise<Array<{ level: string; rank: number; userId: string; userName: string; userPhoto: string | null; wpm: number; accuracy: string }>> {
+    const result: Array<{ level: string; rank: number; userId: string; userName: string; userPhoto: string | null; wpm: number; accuracy: string }> = [];
+
+    for (const level of ["easy", "medium", "hard"] as const) {
+      const rows = await db
+        .select({
+          userId: typingScores.userId,
+          userName: users.name,
+          userPhoto: users.photoUrl,
+          wpm: typingScores.wpm,
+          accuracy: typingScores.accuracy,
+        })
+        .from(typingScores)
+        .innerJoin(users, eq(typingScores.userId, users.id))
+        .where(and(eq(typingScores.monthKey, monthKey), eq(typingScores.level, level)))
+        .orderBy(desc(typingScores.wpm))
+        .limit(100);
+
+      // Deduplicate by user, keep best wpm
+      const bestByUser = new Map<string, typeof rows[0]>();
+      for (const row of rows) {
+        if (!bestByUser.has(row.userId) || row.wpm > bestByUser.get(row.userId)!.wpm) {
+          bestByUser.set(row.userId, row);
+        }
+      }
+
+      Array.from(bestByUser.values())
+        .sort((a, b) => b.wpm - a.wpm)
+        .slice(0, 3)
+        .forEach((r, i) => {
+          result.push({
+            level,
+            rank: i + 1,
+            userId: r.userId,
+            userName: r.userName,
+            userPhoto: r.userPhoto,
+            wpm: r.wpm,
+            accuracy: r.accuracy,
+          });
+        });
+    }
+
+    return result;
   }
 }
 

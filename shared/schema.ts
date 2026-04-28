@@ -523,6 +523,8 @@ export const typingScores = pgTable("typing_scores", {
   accuracy: numeric("accuracy", { precision: 5, scale: 2 }).notNull(),
   durationMs: integer("duration_ms").notNull(),
   difficulty: integer("difficulty").notNull().default(1),
+  // Human-readable level derived from difficulty range: "easy"(1-2) | "medium"(3) | "hard"(4-5)
+  level: varchar("level", { length: 10 }).notNull().default("medium"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

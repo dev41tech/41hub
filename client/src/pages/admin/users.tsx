@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { ArrowLeft, Plus, Pencil, Users, Shield, Check, KeyRound, RotateCcw, Building2, X, Save, Eye, EyeOff } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Users, Shield, Check, KeyRound, RotateCcw, Building2, X, Save, Eye, EyeOff, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,12 +19,23 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useAuth } from "@/lib/auth-context";
 import {
   Table,
   TableBody,
@@ -66,8 +77,12 @@ const passwordRequirements: PasswordRequirement[] = [
 ];
 
 export default function AdminUsers() {
+  const { user: currentUser } = useAuth();
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
+  const [providerFilter, setProviderFilter] = useState<"all" | "microsoft" | "local">("all");
+  const [statusFilter, setStatusFilter] = useState<"active" | "inactive" | "all">("active");
+  const [deactivateUserId, setDeactivateUserId] = useState<string | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
   const [passwordUser, setPasswordUser] = useState<UserWithRoles | null>(null);
@@ -289,11 +304,21 @@ export default function AdminUsers() {
     }
   };
 
-  const filteredUsers = users.filter(
-    (user) =>
+  const filteredUsers = users.filter((user) => {
+    const matchesSearch =
       user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+      user.email.toLowerCase().includes(searchQuery.toLowerCase());
+    const isMs = user.authProvider !== "local";
+    const matchesProvider =
+      providerFilter === "all" ||
+      (providerFilter === "microsoft" && isMs) ||
+      (providerFilter === "local" && !isMs);
+    const matchesStatus =
+      statusFilter === "all" ||
+      (statusFilter === "active" && user.isActive) ||
+      (statusFilter === "inactive" && !user.isActive);
+    return matchesSearch && matchesProvider && matchesStatus;
+  });
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -322,21 +347,44 @@ export default function AdminUsers() {
 
         <TabsContent value="users" className="mt-4">
       <Card>
-        <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4">
-          <CardTitle className="text-base font-medium">
-            {filteredUsers.length} usuário{filteredUsers.length !== 1 ? "s" : ""}
-          </CardTitle>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <SearchInput
-              value={searchQuery}
-              onChange={setSearchQuery}
-              placeholder="Buscar usuários..."
-              className="sm:w-64"
-            />
+        <CardHeader className="pb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <CardTitle className="text-base font-medium">
+              {filteredUsers.length} usuário{filteredUsers.length !== 1 ? "s" : ""}
+              {statusFilter === "active" && <span className="text-xs text-muted-foreground font-normal ml-1">(ativos)</span>}
+            </CardTitle>
             <Button onClick={handleOpenCreate} data-testid="button-create-user">
               <Plus className="h-4 w-4 mr-2" />
               Novo Usuário
             </Button>
+          </div>
+          <div className="flex flex-wrap gap-2 mt-2">
+            <SearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder="Buscar usuários..."
+              className="sm:w-56"
+            />
+            <Select value={providerFilter} onValueChange={(v) => setProviderFilter(v as typeof providerFilter)}>
+              <SelectTrigger className="w-[150px]" data-testid="select-provider-filter">
+                <SelectValue placeholder="Provedor" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos</SelectItem>
+                <SelectItem value="microsoft">Microsoft</SelectItem>
+                <SelectItem value="local">Local</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}>
+              <SelectTrigger className="w-[140px]" data-testid="select-status-filter">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="active">Ativos</SelectItem>
+                <SelectItem value="inactive">Inativos</SelectItem>
+                <SelectItem value="all">Todos</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </CardHeader>
         <CardContent>
@@ -420,17 +468,23 @@ export default function AdminUsers() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <Switch
                             checked={user.isActive}
-                            onCheckedChange={(checked) =>
-                              toggleStatusMutation.mutate({ id: user.id, isActive: checked })
-                            }
+                            onCheckedChange={(checked) => {
+                              if (!checked && user.id === currentUser?.id) {
+                                toast({ title: "Você não pode desativar sua própria conta", variant: "destructive" });
+                                return;
+                              }
+                              toggleStatusMutation.mutate({ id: user.id, isActive: checked });
+                            }}
                             data-testid={`switch-status-${user.id}`}
                           />
-                          <span className={user.isActive ? "text-status-online" : "text-muted-foreground"}>
-                            {user.isActive ? "Ativo" : "Inativo"}
-                          </span>
+                          {user.isActive ? (
+                            <span className="text-status-online text-sm">Ativo</span>
+                          ) : (
+                            <Badge variant="destructive" className="text-xs">Inativo</Badge>
+                          )}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -464,6 +518,18 @@ export default function AdminUsers() {
                                 <KeyRound className="h-4 w-4" />
                               </Button>
                             </>
+                          )}
+                          {user.id !== currentUser?.id && user.isActive && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="text-destructive hover:text-destructive"
+                              onClick={() => setDeactivateUserId(user.id)}
+                              title="Desativar usuário"
+                              data-testid={`button-deactivate-${user.id}`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           )}
                         </div>
                       </TableCell>
@@ -739,9 +805,9 @@ export default function AdminUsers() {
               </div>
             </div>
             <DialogFooter>
-              <Button 
-                type="button" 
-                variant="outline" 
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => {
                   setIsPasswordDialogOpen(false);
                   setPasswordUser(null);
@@ -761,6 +827,34 @@ export default function AdminUsers() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Deactivate confirmation */}
+      <AlertDialog open={deactivateUserId !== null} onOpenChange={(o) => !o && setDeactivateUserId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Desativar usuário?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tem certeza? Isso vai desativar o usuário e impedir o login.
+              O histórico e os dados do usuário serão mantidos. A conta pode ser reativada pelo Switch de Status a qualquer momento.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (deactivateUserId) {
+                  toggleStatusMutation.mutate({ id: deactivateUserId, isActive: false });
+                }
+                setDeactivateUserId(null);
+              }}
+              data-testid="button-confirm-deactivate"
+            >
+              Confirmar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

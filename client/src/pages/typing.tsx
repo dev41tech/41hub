@@ -30,12 +30,20 @@ import {
   Loader2,
   HelpCircle,
   Square,
+  ShieldAlert,
 } from "lucide-react";
 import type { TypingText, TypingSession, TypingScore } from "@shared/schema";
 
 type SessionState = "idle" | "loading" | "ready" | "running" | "finished";
+type Level = "easy" | "medium" | "hard";
 
 const TIMER_DURATION = 60;
+
+const LEVEL_LABELS: Record<Level, string> = {
+  easy: "Fácil",
+  medium: "Média",
+  hard: "Difícil",
+};
 
 export default function TypingTest() {
   const { user } = useAuth();
@@ -43,7 +51,7 @@ export default function TypingTest() {
   const [, setLocation] = useLocation();
 
   const [state, setState] = useState<SessionState>("idle");
-  const [difficulty, setDifficulty] = useState<number>(2);
+  const [level, setLevel] = useState<Level>("medium");
   const [session, setSession] = useState<TypingSession | null>(null);
   const [text, setText] = useState<TypingText | null>(null);
   const [typed, setTyped] = useState("");
@@ -53,10 +61,15 @@ export default function TypingTest() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startPerfRef = useRef<number | null>(null);
 
+  // Anti-cheat telemetry
+  const pasteAttemptsRef = useRef<number>(0);
+  const maxDeltaCharsRef = useRef<number>(0);
+  const prevTypedLenRef = useRef<number>(0);
+
   const startSessionMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/typing/session", { difficulty });
-      return res.json() as Promise<{ session: TypingSession; text: TypingText }>;
+      const res = await apiRequest("POST", "/api/typing/session", { level });
+      return res.json() as Promise<{ session: TypingSession; text: TypingText; level: Level }>;
     },
     onSuccess: (data) => {
       setSession(data.session);
@@ -65,22 +78,39 @@ export default function TypingTest() {
       startPerfRef.current = null;
       setRemainingSeconds(TIMER_DURATION);
       setResult(null);
+      // Reset anti-cheat counters for new session
+      pasteAttemptsRef.current = 0;
+      maxDeltaCharsRef.current = 0;
+      prevTypedLenRef.current = 0;
       setState("ready");
       setTimeout(() => inputRef.current?.focus(), 100);
     },
-    onError: () => {
-      toast({
-        title: "Erro",
-        description: "Nenhum texto disponível. Peça ao admin para cadastrar textos.",
-        variant: "destructive",
-      });
+    onError: (err: Error) => {
+      const msg = err.message?.includes("Nenhum texto")
+        ? err.message
+        : "Nenhum texto disponível. Peça ao admin para cadastrar textos para este nível.";
+      toast({ title: "Erro", description: msg, variant: "destructive" });
       setState("idle");
     },
   });
 
   const submitMutation = useMutation({
-    mutationFn: async (data: { sessionId: string; nonce: string; wpm: number; accuracy: number; durationMs: number; typed: string; difficulty: number }) => {
+    mutationFn: async (data: {
+      sessionId: string;
+      nonce: string;
+      wpm: number;
+      accuracy: number;
+      durationMs: number;
+      typed: string;
+      level: Level;
+      pasteAttempts: number;
+      maxDeltaChars: number;
+    }) => {
       const res = await apiRequest("POST", "/api/typing/submit", data);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.message || body?.error || "Erro ao salvar resultado");
+      }
       return res.json() as Promise<TypingScore>;
     },
     onSuccess: (score) => {
@@ -88,7 +118,7 @@ export default function TypingTest() {
     },
     onError: (err: Error) => {
       toast({
-        title: "Erro ao enviar resultado",
+        title: "Resultado não salvo",
         description: err.message,
         variant: "destructive",
       });
@@ -137,10 +167,12 @@ export default function TypingTest() {
         accuracy: Math.round(accuracy * 100) / 100,
         durationMs: Math.round(durationMs),
         typed,
-        difficulty,
+        level,
+        pasteAttempts: pasteAttemptsRef.current,
+        maxDeltaChars: maxDeltaCharsRef.current,
       });
     }
-  }, [text, typed, session, difficulty]);
+  }, [text, typed, session, level]);
 
   const handleInput = (value: string) => {
     if (state === "ready") {
@@ -161,11 +193,30 @@ export default function TypingTest() {
 
     if (state !== "ready" && state !== "running") return;
 
+    // Anti-cheat: track max delta between consecutive key events
+    const delta = Math.abs(value.length - prevTypedLenRef.current);
+    if (delta > maxDeltaCharsRef.current) maxDeltaCharsRef.current = delta;
+    prevTypedLenRef.current = value.length;
+
     setTyped(value);
 
     if (text && value.length >= text.content.length) {
       calculateResults();
     }
+  };
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    e.preventDefault();
+    pasteAttemptsRef.current++;
+    toast({
+      title: "Colagem bloqueada",
+      description: "Colar texto não é permitido no teste de digitação.",
+      variant: "destructive",
+    });
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
   };
 
   useEffect(() => {
@@ -189,12 +240,6 @@ export default function TypingTest() {
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
     return `${m}:${String(s).padStart(2, "0")}`;
-  };
-
-  const difficultyLabel = (d: number) => {
-    if (d === 1) return "Fácil";
-    if (d === 2) return "Média";
-    return "Difícil";
   };
 
   const renderText = () => {
@@ -273,18 +318,22 @@ export default function TypingTest() {
               <div className="flex items-center gap-3">
                 <label className="text-sm font-medium text-muted-foreground">Dificuldade:</label>
                 <Select
-                  value={String(difficulty)}
-                  onValueChange={(v) => setDifficulty(Number(v))}
+                  value={level}
+                  onValueChange={(v) => setLevel(v as Level)}
                 >
                   <SelectTrigger className="w-[140px]" data-testid="select-difficulty">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="1">Fácil</SelectItem>
-                    <SelectItem value="2">Média</SelectItem>
-                    <SelectItem value="3">Difícil</SelectItem>
+                    <SelectItem value="easy">Fácil</SelectItem>
+                    <SelectItem value="medium">Média</SelectItem>
+                    <SelectItem value="hard">Difícil</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                <ShieldAlert className="h-3.5 w-3.5" />
+                Colar texto é bloqueado e invalida o resultado
               </div>
               <Button
                 onClick={handleStart}
@@ -324,7 +373,7 @@ export default function TypingTest() {
                 {typed.length} / {text.content.length} chars
               </Badge>
               <Badge variant="outline">
-                {difficultyLabel(difficulty)}
+                {LEVEL_LABELS[level]}
               </Badge>
             </div>
             <div className="flex items-center gap-2">
@@ -354,6 +403,8 @@ export default function TypingTest() {
             ref={inputRef}
             value={typed}
             onChange={(e) => handleInput(e.target.value)}
+            onPaste={handlePaste}
+            onDrop={handleDrop}
             className="w-full p-4 rounded-md border bg-background font-mono text-base resize-none focus:outline-none focus:ring-2 focus:ring-primary min-h-[100px]"
             placeholder={state === "ready" ? "Comece a digitar aqui..." : ""}
             autoFocus
@@ -372,7 +423,7 @@ export default function TypingTest() {
             <CardTitle className="flex items-center gap-2">
               <Trophy className="h-5 w-5 text-yellow-500" />
               Resultado
-              <Badge variant="outline" className="ml-2">{difficultyLabel(difficulty)}</Badge>
+              <Badge variant="outline" className="ml-2">{LEVEL_LABELS[level]}</Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -403,7 +454,7 @@ export default function TypingTest() {
 
             {result.score && (
               <p className="text-sm text-green-600 dark:text-green-400 text-center">
-                Resultado salvo no ranking mensal.
+                Resultado salvo no ranking mensal ({LEVEL_LABELS[level]}).
               </p>
             )}
 

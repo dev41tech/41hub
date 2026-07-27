@@ -11,7 +11,6 @@ import {
   Settings,
   User,
   Loader2,
-  Star,
 } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
@@ -193,9 +192,7 @@ export function GlobalSearch() {
   // Navigation pages shown when no query
   const navPages = [
     { label: "Início", icon: LayoutGrid, url: "/" },
-    { label: "Aplicações", icon: Monitor, url: "/apps" },
-    { label: "Dashboards", icon: BarChart3, url: "/dashboards" },
-    { label: "Favoritos", icon: Star, url: "/favorites" },
+    { label: "Recursos", icon: Monitor, url: "/resources" },
     ...(hasTicketAccess
       ? [{ label: "Chamados", icon: Ticket, url: "/tickets" }]
       : []),

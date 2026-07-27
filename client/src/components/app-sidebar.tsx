@@ -3,9 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation, Link } from "wouter";
 import {
   Home,
-  LayoutGrid,
   BarChart3,
-  Star,
   Settings,
   LogOut,
   User,
@@ -55,12 +53,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-const recursosSubItems = [
-  { title: "Apps", url: "/apps", icon: LayoutGrid },
-  { title: "Dashboards", url: "/dashboards", icon: BarChart3 },
-  { title: "Favoritos", url: "/favorites", icon: Star },
-];
-
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout, isAuthenticated } = useAuth();
@@ -68,10 +60,6 @@ export function AppSidebar() {
   const isAdmin = user?.isAdmin;
   const isUsuarioOnly =
     !isAdmin && !(user?.roles?.some((r: any) => r.roleName === "Coordenador"));
-
-  const [recursosOpen, setRecursosOpen] = useState(
-    ["/apps", "/dashboards", "/favorites"].some((p) => location.startsWith(p)),
-  );
 
   const [testesOpen, setTestesOpen] = useState(
     ["/typing", "/logic"].some((p) => location.startsWith(p)),
@@ -167,45 +155,19 @@ export function AppSidebar() {
                 </SidebarMenuButton>
               </SidebarMenuItem>
 
-              {/* Recursos (collapsible) */}
-              <Collapsible open={recursosOpen} onOpenChange={setRecursosOpen}>
-                <SidebarMenuItem>
-                  <CollapsibleTrigger asChild>
-                    <SidebarMenuButton
-                      isActive={recursosSubItems.some((i) =>
-                        location.startsWith(i.url),
-                      )}
-                      data-testid="nav-recursos"
-                    >
-                      <Package className="h-4 w-4" />
-                      <span>Recursos</span>
-                      <ChevronRight
-                        className={`ml-auto h-4 w-4 transition-transform ${
-                          recursosOpen ? "rotate-90" : ""
-                        }`}
-                      />
-                    </SidebarMenuButton>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <SidebarMenuSub>
-                      {recursosSubItems.map((item) => (
-                        <SidebarMenuSubItem key={item.title}>
-                          <SidebarMenuSubButton
-                            asChild
-                            isActive={location.startsWith(item.url)}
-                            data-testid={`nav-${item.title.toLowerCase()}`}
-                          >
-                            <Link href={item.url}>
-                              <item.icon className="h-3.5 w-3.5" />
-                              <span>{item.title}</span>
-                            </Link>
-                          </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                      ))}
-                    </SidebarMenuSub>
-                  </CollapsibleContent>
-                </SidebarMenuItem>
-              </Collapsible>
+              {/* Recursos */}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={location.startsWith("/resources")}
+                  data-testid="nav-recursos"
+                >
+                  <Link href="/resources">
+                    <Package className="h-4 w-4" />
+                    <span>Recursos</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
 
               {/* Chamados — hidden for plain "Usuario" role */}
               {!isUsuarioOnly && (

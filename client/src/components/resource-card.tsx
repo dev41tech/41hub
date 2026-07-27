@@ -137,11 +137,21 @@ export function ResourceCard({
                 </Tooltip>
               </div>
 
-              {showSector && resource.sectorName && (
-                <span className="text-xs text-muted-foreground truncate">
-                  {resource.sectorName}
+              <span className="flex items-center gap-1.5 min-w-0">
+                <span
+                  className={cn(
+                    "inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded-md shrink-0",
+                    isApp ? "bg-primary/10 text-primary" : "bg-chart-2/10 text-chart-2"
+                  )}
+                >
+                  {isApp ? "App" : "Dashboard"}
                 </span>
-              )}
+                {showSector && resource.sectorName && (
+                  <span className="text-xs text-muted-foreground truncate">
+                    {resource.sectorName}
+                  </span>
+                )}
+              </span>
 
               {hasIssue && (
                 <span

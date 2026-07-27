@@ -261,7 +261,7 @@ export default function Home() {
               stripe="bg-primary"
               iconBg="bg-primary/10"
               iconColor="text-primary"
-              onClick={() => setLocation("/apps")}
+              onClick={() => setLocation("/resources")}
             />
             <KpiCard
               label="Dashboards"
@@ -270,7 +270,7 @@ export default function Home() {
               stripe="bg-chart-2"
               iconBg="bg-chart-2/10"
               iconColor="text-chart-2"
-              onClick={() => setLocation("/dashboards")}
+              onClick={() => setLocation("/resources")}
             />
             <KpiCard
               label="Alertas ativos"

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { ShieldOff } from "lucide-react";
-import { Switch, Route } from "wouter";
+import { Switch, Route, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -26,9 +26,7 @@ import Login from "@/pages/login";
 import LocalLogin from "@/pages/local-login";
 import { PasswordChangeModal } from "@/components/password-change-modal";
 import Home from "@/pages/home";
-import Apps from "@/pages/apps";
-import Dashboards from "@/pages/dashboards";
-import Favorites from "@/pages/favorites";
+import Resources from "@/pages/resources";
 import Profile from "@/pages/profile";
 import ResourceViewer from "@/pages/resource-viewer";
 import AdminIndex from "@/pages/admin/index";
@@ -112,9 +110,10 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
-      <Route path="/apps" component={Apps} />
-      <Route path="/dashboards" component={Dashboards} />
-      <Route path="/favorites" component={Favorites} />
+      <Route path="/resources" component={Resources} />
+      <Route path="/apps" component={() => <Redirect to="/resources" />} />
+      <Route path="/dashboards" component={() => <Redirect to="/resources" />} />
+      <Route path="/favorites" component={() => <Redirect to="/resources" />} />
       <Route path="/profile" component={Profile} />
       <Route path="/resource/:id" component={ResourceViewer} />
       <Route path="/tickets" component={() => <TicketGuard component={TicketsIndex} />} />

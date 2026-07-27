@@ -50,7 +50,7 @@ export function RecentAccessSection({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <SectionDivider icon={Clock} label="Acessados Recentemente" />
-        <Link href="/apps">
+        <Link href="/resources">
           <button className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1 shrink-0 ml-3">
             Ver todos <ArrowRight className="h-3 w-3" />
           </button>

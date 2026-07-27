@@ -24,21 +24,14 @@ const STEPS_USUARIO: TutorialStep[] = [
     targetSelector: "[data-sidebar='sidebar']",
     title: "Menu de Navegação",
     description:
-      "A barra lateral te leva a qualquer seção: Início, Aplicações, Dashboards, Base de Conhecimento, Alertas e muito mais.",
+      "A barra lateral te leva a qualquer seção: Início, Recursos, Base de Conhecimento, Alertas e muito mais.",
   },
   {
-    page: "/apps",
-    targetSelector: "[data-tutorial='apps-grid']",
-    title: "Aplicações",
+    page: "/resources",
+    targetSelector: "[data-tutorial='resources-grid']",
+    title: "Recursos",
     description:
-      "Acesse todas as aplicações internas da empresa aqui. Clique em qualquer app para abri-lo diretamente no portal.",
-  },
-  {
-    page: "/dashboards",
-    targetSelector: "[data-tutorial='dashboards-grid']",
-    title: "Dashboards",
-    description:
-      "Aqui ficam os relatórios e dashboards. Clique para visualizá-los sem precisar abrir outro sistema.",
+      "Acesse aplicações internas e dashboards da empresa aqui. Use as abas para filtrar e clique em qualquer item para abri-lo diretamente no portal.",
   },
   {
     page: "/kb",
@@ -84,9 +77,9 @@ const STEPS_COORDENADOR: TutorialStep[] = [
       "A barra lateral organiza todas as seções. Como Coordenador, você verá o menu Chamados com contadores de pendências e acesso a Análises.",
   },
   {
-    page: "/apps",
-    targetSelector: "[data-tutorial='apps-grid']",
-    title: "Aplicações & Dashboards",
+    page: "/resources",
+    targetSelector: "[data-tutorial='resources-grid']",
+    title: "Recursos",
     description:
       "Acesse aplicações internas e relatórios disponíveis para seu perfil. Marque favoritos para acesso rápido na tela inicial.",
   },

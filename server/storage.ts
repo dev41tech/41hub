@@ -2780,6 +2780,7 @@ export class DatabaseStorage implements IStorage {
     const attemptsMap = new Map(attemptRows.map(r => [r.userId, r.attempts]));
 
     const LEVEL_ORDER: Record<string, number> = { easy: 0, medium: 1, hard: 2 };
+    const LEVEL_WEIGHT: Record<string, number> = { easy: 1, medium: 2, hard: 3 };
     // Melhor score = maior precisão; empate desempatado por menos tentativas, depois por menor tempo.
     const eff = (r: { accuracy: string }) => parseFloat(r.accuracy);
     const better = (a: typeof rows[0], b: typeof rows[0]) =>
@@ -2801,9 +2802,10 @@ export class DatabaseStorage implements IStorage {
         .map(r => ({ userId: r.userId, userName: r.userName, userPhoto: r.userPhoto, sectorName: r.sectorName || null, correctCount: r.correctCount, totalQuestions: r.totalQuestions, accuracy: r.accuracy, attempts: attemptsMap.get(r.userId) ?? 1, monthKey: r.monthKey, level: r.level, levels: [r.level] }));
     }
 
-    // Modo "Todos": soma o melhor resultado do usuário em cada dificuldade que ele tentou.
-    // Precisão = total de acertos / total de questões (10, 20 ou 30, conforme quantas
-    // dificuldades foram tentadas) — não é mais uma média ponderada.
+    // Modo "Todos": soma ponderada por dificuldade do melhor resultado do usuário em cada
+    // nível tentado. Cada dificuldade pesa mais que a anterior (fácil=1, média=2, difícil=3),
+    // e a pontuação é uma soma cumulativa (não uma média) — assim, tentar uma dificuldade
+    // maior sempre soma pontos ao total, nunca dilui o resultado de quem já tentou menos níveis.
     const bestByUserLevel = new Map<string, Map<string, typeof rows[0]>>();
     for (const row of rows) {
       if (!bestByUserLevel.has(row.userId)) bestByUserLevel.set(row.userId, new Map());
@@ -2816,13 +2818,15 @@ export class DatabaseStorage implements IStorage {
       const levelRows = Array.from(levelMap.values()).sort(
         (a, b) => (LEVEL_ORDER[a.level] ?? 99) - (LEVEL_ORDER[b.level] ?? 99)
       );
-      let correctSum = 0, totalSum = 0, durationSum = 0;
+      let correctSum = 0, totalSum = 0, durationSum = 0, weightedScore = 0;
       for (const r of levelRows) {
         correctSum += r.correctCount;
         totalSum += r.totalQuestions;
         durationSum += r.durationMs;
+        const levelAccuracy = r.totalQuestions > 0 ? (r.correctCount / r.totalQuestions) * 100 : 0;
+        weightedScore += levelAccuracy * (LEVEL_WEIGHT[r.level] ?? 1);
       }
-      const accuracy = totalSum > 0 ? (correctSum / totalSum) * 100 : 0;
+      const accuracy = weightedScore;
       const ref = levelRows[0];
       const levels = levelRows.map(r => r.level);
       return { userId, accuracy, correctSum, totalSum, ref, levels, durationAvg: durationSum / levelRows.length };
@@ -2906,6 +2910,7 @@ export class DatabaseStorage implements IStorage {
     const attemptsMap = new Map(attemptRows.map(r => [r.userId, r.attempts]));
 
     const LEVEL_ORDER: Record<string, number> = { easy: 0, medium: 1, hard: 2 };
+    const LEVEL_WEIGHT: Record<string, number> = { easy: 1, medium: 2, hard: 3 };
     const eff = (r: { accuracy: string }) => parseFloat(r.accuracy);
     const better = (a: typeof rows[0], b: typeof rows[0]) =>
       eff(a) > eff(b) || (eff(a) === eff(b) && a.durationMs < b.durationMs);
@@ -2918,17 +2923,19 @@ export class DatabaseStorage implements IStorage {
       if (!existing || better(row, existing)) userLevels.set(row.level, row);
     }
 
-    // Soma o melhor resultado por dificuldade tentada (mesmo critério do ranking "Todos").
+    // Soma ponderada por dificuldade do melhor resultado por nível tentado (mesmo critério do ranking "Todos").
     const aggregated = Array.from(bestByUserLevel.entries()).map(([userId, levelMap]) => {
       const levelRows = Array.from(levelMap.values()).sort(
         (a, b) => (LEVEL_ORDER[a.level] ?? 99) - (LEVEL_ORDER[b.level] ?? 99)
       );
-      let correctSum = 0, totalSum = 0;
+      let correctSum = 0, totalSum = 0, weightedScore = 0;
       for (const r of levelRows) {
         correctSum += r.correctCount;
         totalSum += r.totalQuestions;
+        const levelAccuracy = r.totalQuestions > 0 ? (r.correctCount / r.totalQuestions) * 100 : 0;
+        weightedScore += levelAccuracy * (LEVEL_WEIGHT[r.level] ?? 1);
       }
-      const accuracy = totalSum > 0 ? (correctSum / totalSum) * 100 : 0;
+      const accuracy = weightedScore;
       const ref = levelRows[0];
       const levels = levelRows.map(r => r.level);
       return { userId, accuracy, correctSum, totalSum, ref, levels };

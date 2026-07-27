@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { ImageLightbox } from "@/components/image-lightbox";
 import {
   Select,
   SelectContent,
@@ -406,6 +407,7 @@ export default function TicketsDetail() {
   const [conclusionMessage, setConclusionMessage] = useState("");
   const [autoAssignSelf, setAutoAssignSelf] = useState(false);
   const [formExpanded, setFormExpanded] = useState(false);
+  const [lightboxAttachment, setLightboxAttachment] = useState<{ src: string; alt: string; downloadHref: string } | null>(null);
 
   const { data: ticket, isLoading } = useQuery<TicketWithDetails>({
     queryKey: ["/api/tickets", ticketId],
@@ -772,18 +774,22 @@ export default function TicketsDetail() {
                           {initials}
                         </div>
                         <div className="flex-1 max-w-sm rounded-xl border bg-muted/50 overflow-hidden">
-                          <a
-                            href={`/api/tickets/${ticketId}/attachments/${att.id}/download`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="block"
+                          <button
+                            type="button"
+                            className="block w-full"
+                            onClick={() => setLightboxAttachment({
+                              src: `/api/tickets/${ticketId}/attachments/${att.id}/download`,
+                              alt: att.originalName,
+                              downloadHref: `/api/tickets/${ticketId}/attachments/${att.id}/download`,
+                            })}
+                            data-testid={`preview-${att.id}`}
                           >
                             <img
                               src={`/api/tickets/${ticketId}/attachments/${att.id}/download`}
                               alt={att.originalName}
                               className="w-full max-h-64 object-contain bg-muted/30 hover:opacity-90 transition-opacity cursor-zoom-in"
                             />
-                          </a>
+                          </button>
                           <div className="px-3 py-2 flex items-center justify-between gap-2">
                             <div className="min-w-0">
                               <p className="text-xs font-medium truncate">{att.originalName}</p>
@@ -1363,6 +1369,16 @@ export default function TicketsDetail() {
           )}
         </div>
       </div>
+
+      {lightboxAttachment && (
+        <ImageLightbox
+          open={!!lightboxAttachment}
+          onOpenChange={(o) => { if (!o) setLightboxAttachment(null); }}
+          src={lightboxAttachment.src}
+          alt={lightboxAttachment.alt}
+          downloadHref={lightboxAttachment.downloadHref}
+        />
+      )}
 
       {/* ── Dialogs (unchanged) ── */}
       <Dialog open={requestInfoOpen} onOpenChange={setRequestInfoOpen}>

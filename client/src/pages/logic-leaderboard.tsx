@@ -223,8 +223,9 @@ function PodiumCard({ entry, rank }: { entry: PodiumEntry; rank: 1 | 2 | 3 }) {
               className={`${cfg.valueSize} tabular-nums leading-none`}
               style={{ color: cfg.labelColor }}
             >
-              {Number(entry.accuracy).toFixed(0)}%
+              {Number(entry.accuracy).toFixed(0)}
             </span>
+            <span className="text-xs font-semibold text-muted-foreground mb-0.5">pts</span>
           </div>
           <span className="text-xs text-muted-foreground flex items-center gap-1">
             {entry.correctCount}/{entry.totalQuestions} acertos <LevelBadges levels={entry.levels} />
@@ -574,7 +575,10 @@ export default function LogicLeaderboard() {
                       <div className="flex items-end gap-0.5 justify-end">
                         <Target className="h-3 w-3 text-primary mb-0.5" />
                         <span className="text-xl font-black tabular-nums leading-none">
-                          {Number(entry.accuracy).toFixed(0)}%
+                          {Number(entry.accuracy).toFixed(0)}
+                          {selectedLevel === "all" ? (
+                            <span className="text-xs font-semibold text-muted-foreground">pts</span>
+                          ) : "%"}
                         </span>
                       </div>
                       <div className="flex items-center gap-0.5 justify-end mt-0.5">

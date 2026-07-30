@@ -13,7 +13,7 @@ export const healthStatusEnum = pgEnum("health_status", ["UP", "DEGRADED", "DOWN
 export const authProviderEnum = pgEnum("auth_provider", ["entra", "local"]);
 export const ticketStatusEnum = pgEnum("ticket_status", ["ABERTO", "NA_FILA", "EM_ANDAMENTO", "AGUARDANDO_USUARIO", "AGUARDANDO_APROVACAO", "AGUARDANDO_REQUERENTE", "STANDBY", "RESOLVIDO", "CANCELADO"]);
 export const ticketPriorityEnum = pgEnum("ticket_priority", ["BAIXA", "MEDIA", "ALTA", "URGENTE"]);
-export const ticketEventTypeEnum = pgEnum("ticket_event_type", ["ticket_created", "status_changed", "assignees_changed", "comment_added", "attachment_added", "resolved", "reopened", "priority_changed", "category_changed", "approved", "rejected", "sla_deadline_changed"]);
+export const ticketEventTypeEnum = pgEnum("ticket_event_type", ["ticket_created", "status_changed", "assignees_changed", "additional_requesters_changed", "comment_added", "attachment_added", "resolved", "reopened", "priority_changed", "category_changed", "approved", "rejected", "sla_deadline_changed"]);
 export const notificationTypeEnum = pgEnum("notification_type", ["ticket_created", "ticket_comment", "ticket_status", "resource_updated", "alert"]);
 export const alertSeverityEnum = pgEnum("alert_severity", ["info", "warning", "critical"]);
 
@@ -197,6 +197,18 @@ export const ticketAssignees = pgTable("ticket_assignees", {
   userId: varchar("user_id", { length: 36 }).notNull().references(() => users.id, { onDelete: "cascade" }),
   assignedAt: timestamp("assigned_at").notNull().defaultNow(),
   assignedBy: varchar("assigned_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
+}, (t) => [
+  unique().on(t.ticketId, t.userId),
+]);
+
+// Additional requesters (N per ticket) — lets a ticket that escalated across sectors
+// be viewed/answered by a coordinator from another sector, besides the original requester.
+export const ticketAdditionalRequesters = pgTable("ticket_additional_requesters", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  ticketId: varchar("ticket_id", { length: 36 }).notNull().references(() => tickets.id, { onDelete: "cascade" }),
+  userId: varchar("user_id", { length: 36 }).notNull().references(() => users.id, { onDelete: "cascade" }),
+  addedAt: timestamp("added_at").notNull().defaultNow(),
+  addedBy: varchar("added_by", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
 }, (t) => [
   unique().on(t.ticketId, t.userId),
 ]);
@@ -460,6 +472,8 @@ export type InsertTicket = z.infer<typeof insertTicketSchema>;
 
 export type TicketAssignee = typeof ticketAssignees.$inferSelect;
 
+export type TicketAdditionalRequester = typeof ticketAdditionalRequesters.$inferSelect;
+
 export type TicketComment = typeof ticketComments.$inferSelect;
 export type InsertTicketComment = z.infer<typeof insertTicketCommentSchema>;
 
@@ -718,6 +732,7 @@ export type TicketWithDetails = Ticket & {
   creatorName?: string;
   creatorEmail?: string;
   assignees?: Array<{ userId: string; userName: string; userEmail: string }>;
+  additionalRequesters?: Array<{ userId: string; userName: string; userEmail: string }>;
   currentCycle?: TicketSlaCycle | null;
   queuePosition?: number | null;
   queueTotal?: number | null;

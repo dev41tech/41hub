@@ -16,6 +16,7 @@ import {
   ticketSlaPolicies,
   tickets,
   ticketAssignees,
+  ticketAdditionalRequesters,
   ticketComments,
   ticketAttachments,
   ticketSlaCycles,
@@ -283,6 +284,10 @@ export interface IStorage {
 
   adminSetAssignees(ticketId: string, assigneeIds: string[], actorUser: UserWithRoles): Promise<void>;
 
+  setAdditionalRequesters(ticketId: string, requesterIds: string[], actorUser: UserWithRoles): Promise<void>;
+  getTicketAdditionalRequesterIds(ticketId: string): Promise<string[]>;
+  isTicketAdditionalRequester(ticketId: string, userId: string): Promise<boolean>;
+
   addTicketComment(ticketId: string, authorUser: UserWithRoles, data: {
     body: string;
     isInternal?: boolean;
@@ -306,6 +311,7 @@ export interface IStorage {
   updateChecklistItem(ticketId: string, itemId: string, isDone: boolean, userId: string): Promise<import("@shared/schema").TicketChecklistItem | undefined>;
 
   getAdminUserIds(): Promise<string[]>;
+  getCoordinatorAndAdminUserIds(): Promise<string[]>;
   updateSlaCycleDeadline(ticketId: string, data: { resolutionDueAt: Date; reason?: string; updatedBy: string }): Promise<void>;
 
   // Notifications
@@ -1345,6 +1351,12 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(users, eq(ticketAssignees.userId, users.id))
       .where(eq(ticketAssignees.ticketId, t.id));
 
+    const additionalRequesterRows = await db
+      .select({ userId: ticketAdditionalRequesters.userId, userName: users.name, userEmail: users.email })
+      .from(ticketAdditionalRequesters)
+      .innerJoin(users, eq(ticketAdditionalRequesters.userId, users.id))
+      .where(eq(ticketAdditionalRequesters.ticketId, t.id));
+
     const [currentCycle] = await db.select().from(ticketSlaCycles)
       .where(eq(ticketSlaCycles.ticketId, t.id))
       .orderBy(desc(ticketSlaCycles.cycleNumber))
@@ -1360,6 +1372,7 @@ export class DatabaseStorage implements IStorage {
       creatorName: creator?.name,
       creatorEmail: creator?.email,
       assignees: assigneeRows,
+      additionalRequesters: additionalRequesterRows,
       currentCycle: currentCycle || null,
       categoryFormSchema: cat?.formSchema ?? null,
     };
@@ -1378,17 +1391,28 @@ export class DatabaseStorage implements IStorage {
       const userSectorIds = user.roles.map(r => r.sectorId);
       const isCoordinator = user.roles.some(r => r.roleName === "Coordenador");
 
+      const additionalRequesterSub = db.select({ ticketId: ticketAdditionalRequesters.ticketId })
+        .from(ticketAdditionalRequesters)
+        .where(eq(ticketAdditionalRequesters.userId, user.id));
+
       if (isCoordinator) {
         const coordSectorIds = user.roles.filter(r => r.roleName === "Coordenador").map(r => r.sectorId);
         conditions.push(or(
           inArray(tickets.requesterSectorId, coordSectorIds),
-          eq(tickets.createdBy, user.id)
+          eq(tickets.createdBy, user.id),
+          inArray(tickets.id, additionalRequesterSub)
         ));
       } else {
         if (userSectorIds.length > 0) {
-          conditions.push(inArray(tickets.requesterSectorId, userSectorIds));
+          conditions.push(or(
+            inArray(tickets.requesterSectorId, userSectorIds),
+            inArray(tickets.id, additionalRequesterSub)
+          ));
         } else {
-          conditions.push(eq(tickets.createdBy, user.id));
+          conditions.push(or(
+            eq(tickets.createdBy, user.id),
+            inArray(tickets.id, additionalRequesterSub)
+          ));
         }
       }
     }
@@ -1435,14 +1459,15 @@ export class DatabaseStorage implements IStorage {
     if (!user.isAdmin) {
       const userSectorIds = user.roles.map(r => r.sectorId);
       const isCoordinator = user.roles.some(r => r.roleName === "Coordenador");
+      const isAdditionalRequester = await this.isTicketAdditionalRequester(ticketId, user.id);
 
       if (isCoordinator) {
         const coordSectorIds = user.roles.filter(r => r.roleName === "Coordenador").map(r => r.sectorId);
-        if (!coordSectorIds.includes(ticket.requesterSectorId) && ticket.createdBy !== user.id) {
+        if (!coordSectorIds.includes(ticket.requesterSectorId) && ticket.createdBy !== user.id && !isAdditionalRequester) {
           return undefined;
         }
       } else {
-        if (!userSectorIds.includes(ticket.requesterSectorId)) {
+        if (!userSectorIds.includes(ticket.requesterSectorId) && !isAdditionalRequester) {
           return undefined;
         }
       }
@@ -1695,6 +1720,54 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  async setAdditionalRequesters(ticketId: string, requesterIds: string[], actorUser: UserWithRoles): Promise<void> {
+    const existing = await db.select().from(ticketAdditionalRequesters).where(eq(ticketAdditionalRequesters.ticketId, ticketId));
+    const existingIds = existing.map(r => r.userId);
+
+    const toRemove = existingIds.filter(id => !requesterIds.includes(id));
+    const toAdd = requesterIds.filter(id => !existingIds.includes(id));
+
+    for (const uid of toRemove) {
+      await db.delete(ticketAdditionalRequesters).where(
+        and(eq(ticketAdditionalRequesters.ticketId, ticketId), eq(ticketAdditionalRequesters.userId, uid))
+      );
+    }
+
+    for (const uid of toAdd) {
+      await db.insert(ticketAdditionalRequesters).values({
+        ticketId, userId: uid, addedBy: actorUser.id,
+      });
+    }
+
+    await db.insert(ticketEvents).values({
+      ticketId, actorUserId: actorUser.id, type: "additional_requesters_changed",
+      data: { requesterIds, added: toAdd, removed: toRemove },
+    });
+
+    await this.createAuditLog({
+      actorUserId: actorUser.id,
+      action: "ticket_additional_requesters",
+      targetType: "ticket",
+      targetId: ticketId,
+      metadata: { requesterIds },
+    });
+  }
+
+  async getTicketAdditionalRequesterIds(ticketId: string): Promise<string[]> {
+    const rows = await db.select({ userId: ticketAdditionalRequesters.userId })
+      .from(ticketAdditionalRequesters)
+      .where(eq(ticketAdditionalRequesters.ticketId, ticketId));
+    return rows.map(r => r.userId);
+  }
+
+  async isTicketAdditionalRequester(ticketId: string, userId: string): Promise<boolean> {
+    const [row] = await db.select({ id: ticketAdditionalRequesters.id })
+      .from(ticketAdditionalRequesters)
+      .where(and(eq(ticketAdditionalRequesters.ticketId, ticketId), eq(ticketAdditionalRequesters.userId, userId)))
+      .limit(1);
+    return !!row;
+  }
+
   async addTicketComment(ticketId: string, authorUser: UserWithRoles, data: {
     body: string;
     isInternal?: boolean;
@@ -1881,6 +1954,15 @@ export class DatabaseStorage implements IStorage {
       .from(userSectorRoles)
       .where(eq(userSectorRoles.roleId, adminRole[0].id));
     return [...new Set(adminAssignments.map(a => a.userId))];
+  }
+
+  async getCoordinatorAndAdminUserIds(): Promise<string[]> {
+    const eligibleRoles = await db.select().from(roles).where(inArray(roles.name, ["Admin", "Coordenador"]));
+    if (!eligibleRoles.length) return [];
+    const assignments = await db.select({ userId: userSectorRoles.userId })
+      .from(userSectorRoles)
+      .where(inArray(userSectorRoles.roleId, eligibleRoles.map(r => r.id)));
+    return [...new Set(assignments.map(a => a.userId))];
   }
 
   async updateSlaCycleDeadline(ticketId: string, data: { resolutionDueAt: Date; reason?: string; updatedBy: string }): Promise<void> {

@@ -2235,6 +2235,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.put("/api/tickets/:id/additional-requesters", requireAuth, requireTicketAccess, async (req, res) => {
+    try {
+      const isUser = !req.user!.isAdmin && !req.user!.roles?.some(r => r.roleName === "Coordenador");
+      if (isUser) {
+        return res.status(403).json({ error: "Apenas Administradores e Coordenadores podem gerenciar requerentes adicionais" });
+      }
+
+      const schema = z.object({ requesterIds: z.array(z.string()) });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Dados inválidos" });
+      }
+
+      const ticket = await storage.getTicketDetail(req.params.id, req.user!);
+      if (!ticket) return res.status(404).json({ error: "Chamado não encontrado" });
+
+      const eligibleUsers = await storage.getCoordinatorAndAdminUserIds();
+      for (const rid of parsed.data.requesterIds) {
+        if (!eligibleUsers.includes(rid)) {
+          return res.status(400).json({ error: `Requerente adicional ${rid} deve ser um Administrador ou Coordenador` });
+        }
+      }
+
+      await storage.setAdditionalRequesters(req.params.id, parsed.data.requesterIds, req.user!);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error setting additional requesters:", error);
+      res.status(500).json({ error: error.message || "Failed to set additional requesters" });
+    }
+  });
+
   app.get("/api/tickets/:id/comments", requireAuth, requireTicketAccess, async (req, res) => {
     try {
       const ticket = await storage.getTicketDetail(req.params.id, req.user!);

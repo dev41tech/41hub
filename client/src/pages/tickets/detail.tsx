@@ -373,6 +373,84 @@ function AssigneesBlock({ assignees, isAdmin, assignableUsers, onSave, isSaving 
   );
 }
 
+function AdditionalRequestersBlock({ requesters, canManage, eligibleUsers, onSave, isSaving }: {
+  requesters: Array<{ userId: string; userName: string; userEmail: string }>;
+  canManage: boolean; eligibleUsers: DirectoryUser[];
+  onSave: (ids: string[]) => void; isSaving: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<string[]>(requesters.map(r => r.userId));
+
+  function toggle(id: string) {
+    setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-xs text-muted-foreground">Requerentes adicionais</span>
+        {canManage && (
+          <Popover open={open} onOpenChange={(v) => { if (v) setSelected(requesters.map(r => r.userId)); setOpen(v); }}>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-5 px-1.5 text-[10px]" data-testid="button-edit-additional-requesters">
+                <Pencil className="h-2.5 w-2.5 mr-1" />
+                Editar
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-64 p-0" align="end">
+              <Command>
+                <CommandInput placeholder="Buscar usuário..." />
+                <CommandList>
+                  <CommandEmpty>Nenhum usuário encontrado</CommandEmpty>
+                  <CommandGroup heading="Coordenadores e Admins disponíveis">
+                    {eligibleUsers.map((u) => (
+                      <CommandItem key={u.id} value={u.name} onSelect={() => toggle(u.id)} data-testid={`additional-requester-option-${u.id}`}>
+                        <Check className={cn("mr-2 h-4 w-4", selected.includes(u.id) ? "opacity-100" : "opacity-0")} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm truncate">{u.name}</p>
+                          <p className="text-xs text-muted-foreground truncate">{u.email}</p>
+                        </div>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+              <div className="border-t p-2 flex justify-end gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>Cancelar</Button>
+                <Button size="sm" onClick={() => { onSave(selected); setOpen(false); }} disabled={isSaving} data-testid="button-save-additional-requesters">
+                  {isSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Salvar"}
+                </Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
+      </div>
+      {requesters.length === 0 ? (
+        <span className="text-xs text-muted-foreground italic">Nenhum</span>
+      ) : (
+        <div className="flex flex-wrap gap-1">
+          {requesters.map((r) => (
+            <TooltipProvider key={r.userId}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-1 rounded-full bg-chart-2/10 px-2 py-0.5 border border-chart-2/20">
+                    <span className="text-[10px] font-semibold text-chart-2">{getInitials(r.userName)}</span>
+                    <span className="text-[10px] font-medium">{r.userName.split(" ")[0]}</span>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p>{r.userName}</p>
+                  <p className="text-xs text-muted-foreground">{r.userEmail}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function TicketsDetail() {
@@ -436,7 +514,7 @@ export default function TicketsDetail() {
   const { data: allUsers = [] } = useQuery<DirectoryUser[]>({
     queryKey: ["/api/users/directory", "all"],
     queryFn: async () => { const r = await fetch("/api/users/directory?all=true", { credentials: "include" }); if (!r.ok) throw new Error("Failed"); return r.json(); },
-    enabled: !!isAdmin,
+    enabled: !!isAdmin || !!isCoordinator,
   });
   const { data: checklist = [] } = useQuery<ChecklistItem[]>({
     queryKey: ["/api/tickets", ticketId, "checklist"],
@@ -460,6 +538,11 @@ export default function TicketsDetail() {
     return allUsers.filter(u => u.isAdmin || u.roles?.some(r => r.roleName === "Admin"));
   })();
 
+  const eligibleRequesterUsers = (() => {
+    if (!ticket || !allUsers.length) return [];
+    return allUsers.filter(u => u.isAdmin || u.roles?.some(r => r.roleName === "Admin" || r.roleName === "Coordenador"));
+  })();
+
   const updateMutation = useMutation({
     mutationFn: async (patch: Record<string, any>) => { const r = await apiRequest("PATCH", `/api/tickets/${ticketId}`, patch); return r.json(); },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/tickets"] }); queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId, "events"] }); queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId, "comments"] }); toast({ title: "Chamado atualizado" }); },
@@ -468,6 +551,11 @@ export default function TicketsDetail() {
   const assignMutation = useMutation({
     mutationFn: async (assigneeIds: string[]) => { await apiRequest("PUT", `/api/tickets/${ticketId}/assignees`, { assigneeIds }); },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId] }); toast({ title: "Responsáveis atualizados" }); },
+    onError: (e: any) => toast({ title: "Erro", description: e.message, variant: "destructive" }),
+  });
+  const additionalRequestersMutation = useMutation({
+    mutationFn: async (requesterIds: string[]) => { await apiRequest("PUT", `/api/tickets/${ticketId}/additional-requesters`, { requesterIds }); },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["/api/tickets", ticketId] }); toast({ title: "Requerentes adicionais atualizados" }); },
     onError: (e: any) => toast({ title: "Erro", description: e.message, variant: "destructive" }),
   });
   const commentMutation = useMutation({
@@ -1326,6 +1414,15 @@ export default function TicketsDetail() {
                 assignableUsers={assignableUsers}
                 onSave={(ids) => assignMutation.mutate(ids)}
                 isSaving={assignMutation.isPending}
+              />
+            </div>
+            <div className="mt-3 pt-3 border-t">
+              <AdditionalRequestersBlock
+                requesters={ticket.additionalRequesters || []}
+                canManage={!!canComment}
+                eligibleUsers={eligibleRequesterUsers}
+                onSave={(ids) => additionalRequestersMutation.mutate(ids)}
+                isSaving={additionalRequestersMutation.isPending}
               />
             </div>
           </div>
